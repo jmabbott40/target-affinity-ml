@@ -8,6 +8,8 @@ Public API (populated as Tasks 3-8 migrate modules):
 
 __version__ = "1.0.0"
 
+from target_affinity_ml import models  # noqa: F401
+
 __all__ = [
     "__version__",
 ]
