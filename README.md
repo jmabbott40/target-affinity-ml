@@ -20,6 +20,10 @@ pip install target-affinity-ml[deep]
 
 ## Usage
 
+> **Note:** This skeleton is currently at Alpha. The full API shown below
+> becomes available once the migration tasks (Plan 1 Tasks 3-8) complete
+> and the library is tagged at `v1.0.0`. See `CHANGELOG.md` for status.
+
 ```python
 from target_affinity_ml.training import train_and_evaluate
 

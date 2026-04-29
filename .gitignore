@@ -26,11 +26,15 @@ venv/
 env/
 .venv/
 
-# Testing
+# Testing & linting caches
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
+.ruff_cache/
+.mypy_cache/
+*.log
 
 # IDEs
 .vscode/
