@@ -18,3 +18,5 @@ __all__ = [
     "__version__",
     "data", "features", "models", "training",
 ]
+
+from target_affinity_ml import evaluation  # noqa: F401
