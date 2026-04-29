@@ -11,3 +11,5 @@ __version__ = "1.0.0"
 __all__ = [
     "__version__",
 ]
+
+from target_affinity_ml import data  # noqa: F401
