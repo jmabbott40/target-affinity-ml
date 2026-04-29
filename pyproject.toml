@@ -13,9 +13,7 @@ authors = [
     {name = "Joshua Abbott"},
 ]
 classifiers = [
-    # Skeleton without migrated modules is Alpha. Will bump to "5 - Production/Stable"
-    # in the same release that ships the migrated code from Tasks 3-8.
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
