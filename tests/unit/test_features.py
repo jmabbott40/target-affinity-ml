@@ -1,6 +1,5 @@
 """Tests for molecular feature generation."""
 
-import pytest
 import numpy as np
 
 

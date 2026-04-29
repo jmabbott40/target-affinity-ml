@@ -366,8 +366,8 @@ def run_full_bootstrap_analysis(
     ci: float = 0.95,
 ) -> None:
     """Run bootstrap CI and paired tests for all model × split combinations."""
-    import json
     from pathlib import Path
+
     import pandas as pd
 
     PRED_DIR = Path("results/predictions")
@@ -480,7 +480,6 @@ def run_full_bootstrap_analysis(
     logger.info("STEP 3: Win-rate matrices")
     logger.info("=" * 60)
 
-    from target_affinity_ml.visualization.plots import MODEL_DISPLAY_NAMES
 
     for split in ALL_SPLITS:
         preds = {}
@@ -563,14 +562,17 @@ def _plot_win_rate_matrix(win_rates, model_names, split, save_path):
 def _plot_ci_comparison(ci_df, figures_dir):
     """Forest plot: point estimates with CI error bars for key metrics."""
     import matplotlib.pyplot as plt
+
     from target_affinity_ml.visualization.plots import (
-        MODEL_COLORS, MODEL_DISPLAY_NAMES, MODEL_ORDER,
+        MODEL_COLORS,
+        MODEL_DISPLAY_NAMES,
+        MODEL_ORDER,
     )
 
     for metric in ["rmse", "r2", "pearson_r"]:
         fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
 
-        for ax, split in zip(axes, ["random", "scaffold", "target"]):
+        for ax, split in zip(axes, ["random", "scaffold", "target"], strict=False):
             sub = ci_df[(ci_df["split"] == split) & (ci_df["metric"] == metric)]
             if len(sub) == 0:
                 continue
@@ -602,8 +604,8 @@ def _plot_ci_comparison(ci_df, figures_dir):
             ax.invert_yaxis()
 
             # Annotate values
-            for i, (p, lo_v, hi_v) in enumerate(
-                zip(points, sub["ci_lo"].values, sub["ci_hi"].values)
+            for i, (p, _lo_v, _hi_v) in enumerate(
+                zip(points, sub["ci_lo"].values, sub["ci_hi"].values, strict=False)
             ):
                 ax.text(p, i, f" {p:.3f}", va="center", fontsize=8, alpha=0.8)
 
@@ -622,7 +624,10 @@ def _plot_ci_comparison(ci_df, figures_dir):
         logger.info("  Saved: %s", path.name)
 
 
-import matplotlib.pyplot as plt
+# Module-level import placed here intentionally (after _plot_ci_comparison) to
+# avoid re-importing inside the function on every call; ruff's E402 doesn't
+# distinguish this pattern, so suppress.
+import matplotlib.pyplot as plt  # noqa: E402
 
 
 def main():

@@ -25,6 +25,7 @@ import logging
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
 import numpy as np
@@ -105,7 +106,7 @@ def analyze_single_experiment(
     preds = load_predictions(model, split)
     y_true = preds["y_test_true"]
     y_pred = preds["y_test_pred"]
-    y_active = preds["y_test_active"]
+    preds["y_test_active"]
     y_mean = preds["y_test_mean"]
     y_std = preds["y_test_std"]
 
@@ -326,6 +327,8 @@ def _generate_multi_model_plots(phase5_summary: pd.DataFrame) -> None:
     """Generate multi-model overlay plots for calibration and selective prediction."""
     from target_affinity_ml.evaluation.uncertainty import (
         calibration_curve as calc_calibration,
+    )
+    from target_affinity_ml.evaluation.uncertainty import (
         selective_prediction_curve as calc_selective,
     )
 

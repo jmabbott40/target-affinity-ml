@@ -299,7 +299,6 @@ def _build_fusion_loaders(
         How to handle targets without real ESM-2 embeddings.
         See _resolve_esm_embeddings for options.
     """
-    from torch_geometric.data import Batch as PyGBatch
     from torch_geometric.loader import DataLoader as PyGDataLoader
 
     from target_affinity_ml.features.molecular_graphs import smiles_to_graph

@@ -282,7 +282,7 @@ def train_and_evaluate(
     val_reg_metrics = compute_regression_metrics(y_val, y_val_pred)
     test_reg_metrics = compute_regression_metrics(y_test, y_test_pred)
 
-    val_cls_metrics = compute_classification_metrics(y_val_active, y_val_pred)
+    compute_classification_metrics(y_val_active, y_val_pred)
     test_cls_metrics = compute_classification_metrics(y_test_active, y_test_pred)
 
     logger.info("  Validation regression:  %s", _format_metrics(val_reg_metrics))

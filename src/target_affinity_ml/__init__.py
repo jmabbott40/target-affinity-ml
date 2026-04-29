@@ -9,13 +9,15 @@ Public API (populated as Tasks 3-8 migrate modules):
 __version__ = "1.0.0"
 
 # Subpackages (populated by Plan 1 Tasks 3-8 migrations)
-from target_affinity_ml import data  # noqa: F401
-from target_affinity_ml import features  # noqa: F401
-from target_affinity_ml import models  # noqa: F401
-from target_affinity_ml import training  # noqa: F401
-from target_affinity_ml import evaluation  # noqa: F401
-from target_affinity_ml import visualization  # noqa: F401
-from target_affinity_ml import benchmarks  # noqa: F401
+from target_affinity_ml import (
+    benchmarks,  # noqa: F401
+    data,  # noqa: F401
+    evaluation,  # noqa: F401
+    features,  # noqa: F401
+    models,  # noqa: F401
+    training,  # noqa: F401
+    visualization,  # noqa: F401
+)
 
 __all__ = [
     "__version__",

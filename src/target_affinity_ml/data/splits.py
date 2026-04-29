@@ -284,7 +284,7 @@ def target_split(
         "test": np.sort(test_idx),
     }
 
-    n = len(df)
+    len(df)
     logger.info(
         "Target split: %d train targets (%d samples), "
         "%d val targets (%d samples), %d test targets (%d samples)",

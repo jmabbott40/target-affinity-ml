@@ -13,7 +13,6 @@ Usage:
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 from rdkit import Chem
 from torch_geometric.data import Data

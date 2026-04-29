@@ -1,8 +1,8 @@
 """Tests for dataset splitting strategies."""
 
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def _make_dummy_df(n: int = 100) -> pd.DataFrame:

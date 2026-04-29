@@ -116,7 +116,7 @@ class FusionModel(DeepModelBase):
         # --- Ligand branch ---
         x, edge_index, batch_idx = graph_batch.x, graph_batch.edge_index, graph_batch.batch
 
-        for conv, bn in zip(self.gnn_convs, self.gnn_bns):
+        for conv, bn in zip(self.gnn_convs, self.gnn_bns, strict=False):
             x = conv(x, edge_index)
             x = bn(x)
             x = F.relu(x)

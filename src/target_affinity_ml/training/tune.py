@@ -26,7 +26,6 @@ import logging
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -147,7 +146,7 @@ def tune_model(
     model_cls = get_model_class(model_name)
 
     for i, combo in enumerate(combinations):
-        params = dict(zip(param_names, combo))
+        params = dict(zip(param_names, combo, strict=False))
         params.update(fixed_params)
 
         logger.info("  [%d/%d] %s", i + 1, total, params)

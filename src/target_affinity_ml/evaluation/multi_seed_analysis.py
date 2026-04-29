@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -345,7 +344,7 @@ def run_full_multi_seed_analysis(
         pairwise_df.to_csv(pairwise_path, index=False)
         logger.info("Saved pairwise tests to %s", pairwise_path)
 
-        sig = pairwise_df[pairwise_df.get("significant_005", False) == True]
+        sig = pairwise_df[pairwise_df.get("significant_005", False)]
         if not sig.empty:
             logger.info("\nSignificant differences (p < 0.05):")
             for _, row in sig.iterrows():

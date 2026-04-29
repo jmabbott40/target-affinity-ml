@@ -44,7 +44,6 @@ class TestStandardizeSmiles:
     @pytest.mark.skip(reason="Not yet implemented")
     def test_mw_filter_too_large(self):
         """Molecules above MW maximum should be filtered."""
-        from target_affinity_ml.data.standardize import standardize_smiles
 
         # Very large molecule — this would need a real large SMILES
         pass

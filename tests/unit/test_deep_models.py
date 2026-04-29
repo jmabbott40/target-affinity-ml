@@ -13,8 +13,9 @@ import pytest
 torch = pytest.importorskip("torch")
 torch_geometric = pytest.importorskip("torch_geometric")
 
-from torch.utils.data import DataLoader, TensorDataset
-
+# E402 suppressed: torch.utils.data must be imported AFTER importorskip,
+# otherwise the module-level import would crash before pytest can skip the file.
+from torch.utils.data import DataLoader, TensorDataset  # noqa: E402
 
 # ---- Molecular graph conversion tests ----
 

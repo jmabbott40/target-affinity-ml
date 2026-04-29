@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 
 def _make_synthetic_data(n_samples=200, n_features=100, seed=42):

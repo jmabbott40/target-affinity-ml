@@ -209,8 +209,8 @@ def build_protein_sequence_cache(
     uniprot_to_seq = fetch_sequences_from_uniprot(uniprot_ids)
 
     # Step 3: Build final cache
-    gene_map = dict(zip(targets["target_chembl_id"], targets["gene_symbol"]))
-    name_map = dict(zip(targets["target_chembl_id"], targets["pref_name"]))
+    gene_map = dict(zip(targets["target_chembl_id"], targets["gene_symbol"], strict=False))
+    name_map = dict(zip(targets["target_chembl_id"], targets["pref_name"], strict=False))
 
     cache = {}
     for tid in target_ids:

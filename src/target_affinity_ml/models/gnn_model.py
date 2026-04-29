@@ -85,7 +85,7 @@ class GNNModel(DeepModelBase):
         x, edge_index, batch_idx = batch.x, batch.edge_index, batch.batch
 
         # Message passing
-        for conv, bn in zip(self.convs, self.bns):
+        for conv, bn in zip(self.convs, self.bns, strict=False):
             x = conv(x, edge_index)
             x = bn(x)
             x = F.relu(x)
