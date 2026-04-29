@@ -7,8 +7,15 @@ fix before proceeding to Plan 2 (GPCR work).
 
 Reference values come from recomputing metrics on saved preprint v1
 prediction NPZ files (see scripts/extract_reference_metrics.py).
+
+Note: The library's feature loaders (`load_morgan_fingerprints`,
+`load_rdkit_descriptors`) use a relative path `data/processed/v1/...`
+inherited from the original kinase pipeline. The test therefore runs
+with the kinase repo as the working directory.
 """
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -21,6 +28,17 @@ except ImportError as e:
 
 REFERENCE_PATH = Path(__file__).parent / "kinase_v1_reference.json"
 KINASE_REPO = Path("/Users/joshuaabbott/mlproject")
+
+
+@contextmanager
+def working_dir(path: Path):
+    """Temporarily change the working directory."""
+    prev = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
 
 
 @pytest.fixture(scope="session")
@@ -50,30 +68,35 @@ def test_rf_random_matches_preprint_v1(reference):
             "Integration test requires kinase repo cloned + data downloaded."
         )
 
-    result = train_and_evaluate(
-        config_path=str(config_path),
-        split_strategy=reference["split"],
-        dataset_version="v1",
-        dataset_dir=str(dataset_dir),
-    )
+    # Run from kinase repo cwd because the library's feature loaders use
+    # relative `data/processed/v1/...` paths (carried over from the kinase
+    # codebase; refactoring the loaders is Plan 2 work).
+    with working_dir(KINASE_REPO):
+        result = train_and_evaluate(
+            config_path=config_path,
+            split_strategy=reference["split"],
+            dataset_version="v1",
+        )
 
-    actual = result["test_metrics"]
+    # train_and_evaluate returns a flat metrics dict with keys like
+    # "test_rmse", "test_r2", "test_pearson_r" (not nested under test_metrics).
     expected = reference["metrics"]
     tolerance = reference["tolerance"]
 
     failures = []
     for metric in ["rmse", "r2", "pearson_r"]:
-        if metric not in actual:
-            failures.append(f"  {metric}: not in actual metrics dict")
+        actual_key = f"test_{metric}"
+        if actual_key not in result:
+            failures.append(f"  {actual_key}: not in result dict")
             continue
-        diff = abs(actual[metric] - expected[metric])
+        diff = abs(result[actual_key] - expected[metric])
         if diff > tolerance[metric]:
             failures.append(
-                f"  {metric}: got {actual[metric]:.6f}, "
+                f"  {metric}: got {result[actual_key]:.6f}, "
                 f"expected {expected[metric]:.6f}, diff={diff:.6f} "
                 f"> tolerance {tolerance[metric]}"
             )
 
     assert not failures, (
-        f"\nRF random reference mismatch:\n" + "\n".join(failures)
+        "\nRF random reference mismatch:\n" + "\n".join(failures)
     )
