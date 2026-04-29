@@ -1,0 +1,71 @@
+# Dataset curation configuration — v1
+# All decisions documented in docs/data_card.md
+
+version: "v1"
+
+# Data source
+source:
+  database: "ChEMBL"
+  target_family: "Protein kinase"
+  target_type: "SINGLE PROTEIN"
+  organism: "Homo sapiens"
+
+# Activity filtering
+activity:
+  types: ["IC50", "Ki", "Kd"]
+  standard_relation: "="
+  standard_units: "nM"
+  require_pchembl: true
+  assay_confidence_min: 7  # Direct single protein target assignment
+
+# Molecule standardization
+standardization:
+  remove_salts: true
+  neutralize_charges: true
+  canonical_smiles: true
+  mw_min: 100.0
+  mw_max: 900.0
+  max_heavy_atoms: 100
+
+# Duplicate handling
+# For same (canonical_smiles, target_chembl_id, activity_type):
+duplicates:
+  aggregation: "median"
+  noise_std_threshold: 1.0  # Flag as noisy if std > 1.0 pActivity units
+  min_measurements_for_noise_flag: 3
+
+# Quality filters
+quality:
+  pactivity_min: 3.0   # Remove values below 1 mM
+  pactivity_max: 12.0  # Remove values above 1 pM (likely errors)
+
+# Classification threshold
+classification:
+  active_pactivity_threshold: 6.0  # pActivity >= 6.0 (IC50 <= 1 μM) = active
+
+# Feature engineering
+features:
+  morgan:
+    radius: 2
+    n_bits: 2048
+  descriptors:
+    drop_missing_threshold: 0.05  # Drop descriptors with >5% missing values
+
+# Splitting
+splits:
+  random:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42
+    stratify_by_target: true
+  scaffold:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42
+    scaffold_type: "murcko_generic"  # Generic Murcko scaffolds
+  target:
+    # Hold out entire kinase subfamilies for testing
+    seed: 42
+    holdout_strategy: "kinase_group"  # Group by kinase classification

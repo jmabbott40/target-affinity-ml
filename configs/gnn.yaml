@@ -1,0 +1,24 @@
+# Ligand GNN (Graph Isomorphism Network)
+# SMILES → molecular graph → GIN message passing → pActivity
+
+model:
+  name: "gnn"
+  type: "regression"
+
+features:
+  ligand: "molecular_graph"
+
+hyperparameters:
+  num_layers: 3
+  hidden_dim: 128
+  dropout: 0.3
+  batch_size: 512
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  max_epochs: 100
+  patience: 15
+  lr_scheduler: "cosine"
+
+uncertainty:
+  method: "mc_dropout"
+  mc_dropout_samples: 20
