@@ -1,0 +1,16 @@
+{
+  "model": "random_forest",
+  "split": "random",
+  "predictions_file": "results/predictions/random_forest_random.npz",
+  "n_test_samples": 35288,
+  "metrics": {
+    "rmse": 0.8184657982877056,
+    "r2": 0.5870320809814402,
+    "pearson_r": 0.7688266511471061
+  },
+  "tolerance": {
+    "rmse": 0.001,
+    "r2": 0.005,
+    "pearson_r": 0.005
+  }
+}
