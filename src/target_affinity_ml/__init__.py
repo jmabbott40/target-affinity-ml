@@ -15,8 +15,10 @@ from target_affinity_ml import models  # noqa: F401
 from target_affinity_ml import training  # noqa: F401
 from target_affinity_ml import evaluation  # noqa: F401
 from target_affinity_ml import visualization  # noqa: F401
+from target_affinity_ml import benchmarks  # noqa: F401
 
 __all__ = [
     "__version__",
     "data", "features", "models", "training", "evaluation", "visualization",
+    "benchmarks",
 ]
