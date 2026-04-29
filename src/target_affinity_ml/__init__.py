@@ -8,10 +8,12 @@ Public API (populated as Tasks 3-8 migrate modules):
 
 __version__ = "1.0.0"
 
+# Subpackages (populated by Plan 1 Tasks 3-8 migrations)
+from target_affinity_ml import data  # noqa: F401
 from target_affinity_ml import features  # noqa: F401
+from target_affinity_ml import models  # noqa: F401
 
 __all__ = [
     "__version__",
+    "data", "features", "models",
 ]
-
-from target_affinity_ml import data  # noqa: F401
