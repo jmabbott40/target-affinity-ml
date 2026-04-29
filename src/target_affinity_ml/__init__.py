@@ -12,8 +12,9 @@ __version__ = "1.0.0"
 from target_affinity_ml import data  # noqa: F401
 from target_affinity_ml import features  # noqa: F401
 from target_affinity_ml import models  # noqa: F401
+from target_affinity_ml import training  # noqa: F401
 
 __all__ = [
     "__version__",
-    "data", "features", "models",
+    "data", "features", "models", "training",
 ]
