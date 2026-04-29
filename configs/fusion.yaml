@@ -1,0 +1,27 @@
+# GNN + ESM-2 Fusion model
+# Ligand branch (GIN) + Protein branch (ESM-2) → concatenation → MLP
+
+model:
+  name: "fusion"
+  type: "regression"
+
+features:
+  ligand: "molecular_graph"
+  protein: "esm2_embedding"
+
+hyperparameters:
+  gnn_layers: 3
+  gnn_hidden_dim: 128
+  protein_projection_dim: 256
+  fusion_hidden_dims: [256, 128]
+  dropout: 0.3
+  batch_size: 512
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  max_epochs: 100
+  patience: 15
+  lr_scheduler: "cosine"
+
+uncertainty:
+  method: "mc_dropout"
+  mc_dropout_samples: 20

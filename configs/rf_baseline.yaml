@@ -1,0 +1,29 @@
+# Random Forest baseline configuration
+
+model:
+  name: "random_forest"
+  type: "regression"
+
+features:
+  type: "morgan_fingerprint"
+  params:
+    radius: 2
+    n_bits: 2048
+
+hyperparameters:
+  n_estimators: 500
+  max_depth: null    # No limit
+  min_samples_leaf: 2
+  max_features: "sqrt"
+  n_jobs: -1
+  random_state: 42
+
+# Hyperparameter search grid (for tuning phase)
+search_grid:
+  n_estimators: [100, 300, 500, 1000]
+  max_depth: [null, 20, 30, 50]
+  min_samples_leaf: [1, 2, 5]
+  max_features: ["sqrt", "log2", 0.3]
+
+uncertainty:
+  method: "tree_variance"  # Std of individual tree predictions

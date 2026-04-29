@@ -1,0 +1,25 @@
+# ESM-2 protein embedding + Morgan fingerprint MLP
+# Concatenates ESM-2 (1280-dim) with Morgan FP (2048-dim) → MLP
+
+model:
+  name: "esm_fp_mlp"
+  type: "regression"
+
+features:
+  ligand: "morgan_fingerprint"
+  protein: "esm2_embedding"
+
+hyperparameters:
+  input_dim: 3328      # 2048 (FP) + 1280 (ESM-2)
+  hidden_dims: [512, 256, 128]
+  dropout: 0.3
+  batch_size: 1024
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  max_epochs: 100
+  patience: 10
+  lr_scheduler: "cosine"
+
+uncertainty:
+  method: "mc_dropout"
+  mc_dropout_samples: 20

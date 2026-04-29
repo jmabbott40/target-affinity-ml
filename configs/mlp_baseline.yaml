@@ -1,0 +1,33 @@
+# MLP (Multi-Layer Perceptron) baseline configuration
+
+model:
+  name: "mlp"
+  type: "regression"
+
+features:
+  type: "morgan_fingerprint"
+  params:
+    radius: 2
+    n_bits: 2048
+
+hyperparameters:
+  hidden_layer_sizes: [256, 128]
+  activation: "relu"
+  solver: "adam"
+  alpha: 0.0001
+  batch_size: 512
+  learning_rate_init: 0.001
+  max_iter: 200
+  early_stopping: true
+  validation_fraction: 0.1
+  n_iter_no_change: 10
+  random_state: 42
+
+search_grid:
+  hidden_layer_sizes: [[256, 128], [512, 256], [512, 256, 128]]
+  alpha: [0.00001, 0.0001, 0.001]
+  learning_rate_init: [0.0005, 0.001, 0.005]
+
+uncertainty:
+  method: "ensemble"
+  n_ensemble: 3
