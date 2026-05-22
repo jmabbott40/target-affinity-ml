@@ -41,6 +41,7 @@ PROCESSED_DIR = Path("data/processed")
 def compute_and_cache_features(
     config_path: Path = Path("configs/dataset_v1.yaml"),
     force: bool = False,
+    data_dir=None,
 ) -> dict[str, Path]:
     """Compute molecular features and cache to disk.
 
@@ -57,17 +58,25 @@ def compute_and_cache_features(
         Path to dataset config YAML.
     force : bool
         If True, recompute even if cached files exist.
+    data_dir : path-like or None
+        Root directory under which ``<version>/features/`` and
+        ``<version>/curated_activities.parquet`` are resolved.
+        When *None* (default) the module-level ``PROCESSED_DIR``
+        (``data/processed``, relative to cwd) is used, preserving
+        existing behaviour for callers that omit this argument.
 
     Returns
     -------
     dict[str, Path]
         Paths to saved feature files.
     """
+    base = Path(data_dir) if data_dir is not None else PROCESSED_DIR
+
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
     version = config["version"]
-    output_dir = PROCESSED_DIR / version / "features"
+    output_dir = base / version / "features"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define output file paths
@@ -76,7 +85,7 @@ def compute_and_cache_features(
     smiles_index_path = output_dir / "smiles_index.json"
 
     # --- Load curated dataset ---
-    curated_path = PROCESSED_DIR / version / "curated_activities.parquet"
+    curated_path = base / version / "curated_activities.parquet"
     if not curated_path.exists():
         raise FileNotFoundError(
             f"Curated dataset not found at {curated_path}. "
@@ -150,6 +159,7 @@ def compute_and_cache_features(
 
 def load_morgan_fingerprints(
     version: str = "v1",
+    data_dir=None,
 ) -> tuple[np.ndarray, list[str]]:
     """Load cached Morgan fingerprints.
 
@@ -157,13 +167,18 @@ def load_morgan_fingerprints(
     ----------
     version : str
         Dataset version.
+    data_dir : path-like or None
+        Root directory under which ``<version>/features/`` is resolved.
+        When *None* (default) the module-level ``PROCESSED_DIR``
+        (``data/processed``, relative to cwd) is used.
 
     Returns
     -------
     tuple[np.ndarray, list[str]]
         (fingerprint_matrix, smiles_list).
     """
-    features_dir = PROCESSED_DIR / version / "features"
+    base = Path(data_dir) if data_dir is not None else PROCESSED_DIR
+    features_dir = base / version / "features"
     fp_data = np.load(features_dir / "morgan_fp.npz")
     with open(features_dir / "smiles_index.json") as f:
         smiles_list = json.load(f)
@@ -172,6 +187,7 @@ def load_morgan_fingerprints(
 
 def load_rdkit_descriptors(
     version: str = "v1",
+    data_dir=None,
 ) -> tuple[np.ndarray, list[str], list[str]]:
     """Load cached RDKit descriptors.
 
@@ -179,13 +195,18 @@ def load_rdkit_descriptors(
     ----------
     version : str
         Dataset version.
+    data_dir : path-like or None
+        Root directory under which ``<version>/features/`` is resolved.
+        When *None* (default) the module-level ``PROCESSED_DIR``
+        (``data/processed``, relative to cwd) is used.
 
     Returns
     -------
     tuple[np.ndarray, list[str], list[str]]
         (descriptor_matrix, descriptor_names, smiles_list).
     """
-    features_dir = PROCESSED_DIR / version / "features"
+    base = Path(data_dir) if data_dir is not None else PROCESSED_DIR
+    features_dir = base / version / "features"
     desc_data = np.load(features_dir / "rdkit_descriptors.npz", allow_pickle=True)
     with open(features_dir / "smiles_index.json") as f:
         smiles_list = json.load(f)
@@ -198,6 +219,7 @@ def load_rdkit_descriptors(
 
 def load_esm2_embeddings(
     version: str = "v1",
+    data_dir=None,
 ) -> tuple[np.ndarray, dict[str, int]]:
     """Load cached ESM-2 protein embeddings.
 
@@ -205,6 +227,10 @@ def load_esm2_embeddings(
     ----------
     version : str
         Dataset version.
+    data_dir : path-like or None
+        Root directory under which ``<version>/features/`` is resolved.
+        When *None* (default) the module-level ``PROCESSED_DIR``
+        (``data/processed``, relative to cwd) is used.
 
     Returns
     -------
@@ -212,7 +238,8 @@ def load_esm2_embeddings(
         (embedding_matrix, target_to_row) where target_to_row maps
         target_chembl_id to row index in the embedding matrix.
     """
-    features_dir = PROCESSED_DIR / version / "features"
+    base = Path(data_dir) if data_dir is not None else PROCESSED_DIR
+    features_dir = base / version / "features"
     emb_data = np.load(features_dir / "esm2_embeddings.npz")
     with open(features_dir / "target_index.json") as f:
         target_to_row = json.load(f)
