@@ -113,11 +113,6 @@ class TestFetchTargetClassExplicit:
         # Activity API should have been called once per target ID
         assert activity_mock.filter.call_count == 2
 
-        # Each call should use one of the explicit target IDs
-        called_target_ids = {
-            call.kwargs.get("target_chembl_id") or call.args[0]
-            for call in activity_mock.filter.call_args_list
-        }
         # filter is called with keyword arg target_chembl_id=
         filter_calls = activity_mock.filter.call_args_list
         queried_ids = {c.kwargs["target_chembl_id"] for c in filter_calls}
@@ -169,6 +164,27 @@ class TestFetchTargetClassExplicit:
 
         assert targets_df.set_index("target_chembl_id").loc["CHEMBL217", "subfamily"] == "dopamine"
         assert targets_df.set_index("target_chembl_id").loc["CHEMBL224", "subfamily"] == "serotonin"
+
+    def test_max_targets_truncates_explicit_id_path(self):
+        """max_targets limits how many explicit IDs are queried."""
+        cfg = TargetClassConfig(
+            class_name="gpcr_aminergic",
+            explicit_target_ids=["CHEMBL217", "CHEMBL224", "CHEMBL999"],
+            raw_filename_stem="chembl_gpcr_aminergic",
+        )
+
+        activity_mock = _make_activity_api_mock([_SAMPLE_ACTIVITY])
+        client_mock = MagicMock()
+        client_mock.activity = activity_mock
+
+        with patch(
+            "chembl_webresource_client.new_client.new_client", client_mock
+        ):
+            activities_df, targets_df = fetch_target_class(cfg, max_targets=2)
+
+        # Only 2 of the 3 explicit IDs should have been queried
+        assert activity_mock.filter.call_count == 2
+        assert len(targets_df) == 2
 
 
 # ---------------------------------------------------------------------------

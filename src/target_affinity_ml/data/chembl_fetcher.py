@@ -114,13 +114,7 @@ def _classify_kinase(go_ids: set[str]) -> str:
 
 
 def _classify_subfamily(target_id: str, config: TargetClassConfig) -> str:
-    """Look up a target's subfamily from the config's subfamily_map.
-
-    Returns the mapped subfamily name, or "unknown" if the target is not in
-    the map. For kinases, use ``_classify_kinase`` on GO IDs instead; this
-    function is used for configs that carry an explicit subfamily_map (e.g.,
-    the GPCR aminergic config).
-    """
+    """Return config.subfamily_map[target_id], or "unknown" if absent."""
     return config.subfamily_map.get(target_id, "unknown")
 
 
@@ -208,6 +202,132 @@ def _extract_kinase_records(targets: list[dict]) -> list[dict]:
     return kinase_records
 
 
+def _fetch_targets_by_go(
+    config: TargetClassConfig,
+    organism: str = "Homo sapiens",
+) -> pd.DataFrame:
+    """Discover single-protein targets from ChEMBL using config.go_terms.
+
+    Uses a two-pass strategy: fast keyword search first, full download as
+    fallback. GO-term matching uses ``config.go_terms`` (not the module-level
+    ``KINASE_GO_TERMS`` constant) so any TargetClassConfig's go_terms are
+    honoured.
+
+    Parameters
+    ----------
+    config : TargetClassConfig
+        Provides ``go_terms``, ``name_keywords``, and ``class_name``.
+    organism : str
+        Species filter.
+
+    Returns
+    -------
+    pd.DataFrame
+        Discovered targets with columns: target_chembl_id, pref_name,
+        target_type, organism, kinase_group, gene_symbol.
+    """
+    from chembl_webresource_client.new_client import new_client
+
+    target_api = new_client.target
+
+    # Build a local version of _extract_kinase_records that uses config.go_terms
+    def _extract_records_for_config(targets: list[dict]) -> list[dict]:
+        records = []
+        seen_ids: set[str] = set()
+        for t in targets:
+            if t["target_chembl_id"] in seen_ids:
+                continue
+
+            is_match = False
+            go_ids: set[str] = set()
+
+            for comp in t.get("target_components", []):
+                xrefs = comp.get("target_component_xrefs", [])
+                comp_go_ids = {
+                    x["xref_id"]
+                    for x in xrefs
+                    if x.get("xref_src_db") == "GoFunction"
+                }
+                go_ids |= comp_go_ids
+                if comp_go_ids & config.go_terms:
+                    is_match = True
+
+            # Fallback: name-based matching
+            if not is_match:
+                name = t.get("pref_name", "").lower()
+                is_match = any(kw in name for kw in config.name_keywords) and _is_kinase_by_name(t)
+
+            if not is_match:
+                continue
+
+            seen_ids.add(t["target_chembl_id"])
+
+            gene_symbol = "Unknown"
+            for comp in t.get("target_components", []):
+                for syn in comp.get("target_component_synonyms", []):
+                    if syn.get("syn_type") == "GENE_SYMBOL":
+                        gene_symbol = syn["component_synonym"]
+                        break
+                if gene_symbol != "Unknown":
+                    break
+
+            records.append(
+                {
+                    "target_chembl_id": t["target_chembl_id"],
+                    "pref_name": t["pref_name"],
+                    "target_type": t["target_type"],
+                    "organism": t["organism"],
+                    "kinase_group": _classify_kinase(go_ids),
+                    "gene_symbol": gene_symbol,
+                }
+            )
+        return records
+
+    # Search keyword: first name_keyword, or class_name as fallback
+    search_keyword = config.name_keywords[0] if config.name_keywords else config.class_name
+
+    logger.info(
+        "Searching ChEMBL for %s targets via GO discovery (%s)...",
+        config.class_name,
+        organism,
+    )
+    try:
+        candidates = list(
+            target_api.search(search_keyword).filter(
+                target_type="SINGLE PROTEIN", organism=organism,
+            )
+        )
+        logger.info("Search returned %d candidate targets", len(candidates))
+        records = _extract_records_for_config(candidates)
+    except Exception as e:
+        logger.warning("Search-based fetch failed (%s), using full download", e)
+        records = []
+
+    MIN_EXPECTED = 100
+    if len(records) < MIN_EXPECTED:
+        logger.info(
+            "Fast search found only %d targets (expected >=%d). "
+            "Falling back to full target download (this may take a few minutes)...",
+            len(records), MIN_EXPECTED,
+        )
+        all_targets = list(
+            target_api.filter(target_type="SINGLE PROTEIN", organism=organism)
+        )
+        logger.info("Downloaded %d total single-protein targets", len(all_targets))
+        records = _extract_records_for_config(all_targets)
+
+    if not records:
+        logger.error(
+            "No %s targets found! Check ChEMBL API connectivity.",
+            config.class_name,
+        )
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records).drop_duplicates(subset=["target_chembl_id"])
+    logger.info("Found %d %s targets", len(df), config.class_name)
+    return df
+
+
 def fetch_kinase_targets(organism: str = "Homo sapiens") -> pd.DataFrame:
     """Fetch all single-protein kinase targets from ChEMBL.
 
@@ -233,49 +353,7 @@ def fetch_kinase_targets(organism: str = "Homo sapiens") -> pd.DataFrame:
         Kinase targets with columns: target_chembl_id, pref_name,
         target_type, organism, kinase_group, gene_symbol.
     """
-    from chembl_webresource_client.new_client import new_client
-
-    target_api = new_client.target
-
-    # --- Fast pass: search-based approach ---
-    logger.info("Searching ChEMBL for kinase targets (%s)...", organism)
-    try:
-        candidates = list(
-            target_api.search("kinase").filter(
-                target_type="SINGLE PROTEIN", organism=organism,
-            )
-        )
-        logger.info("Search returned %d candidate targets", len(candidates))
-        kinase_records = _extract_kinase_records(candidates)
-    except Exception as e:
-        logger.warning("Search-based fetch failed (%s), using full download", e)
-        kinase_records = []
-
-    # --- Fallback: full download if search found too few ---
-    MIN_EXPECTED_KINASES = 100
-    if len(kinase_records) < MIN_EXPECTED_KINASES:
-        logger.info(
-            "Fast search found only %d kinases (expected >=%d). "
-            "Falling back to full target download (this may take a few minutes)...",
-            len(kinase_records), MIN_EXPECTED_KINASES,
-        )
-        all_targets = list(
-            target_api.filter(target_type="SINGLE PROTEIN", organism=organism)
-        )
-        logger.info("Downloaded %d total single-protein targets", len(all_targets))
-        kinase_records = _extract_kinase_records(all_targets)
-
-    if not kinase_records:
-        logger.error("No kinase targets found! Check ChEMBL API connectivity.")
-        return pd.DataFrame()
-
-    df = pd.DataFrame(kinase_records).drop_duplicates(subset=["target_chembl_id"])
-    logger.info(
-        "Found %d kinase targets (%s)",
-        len(df),
-        df["kinase_group"].value_counts().to_dict(),
-    )
-    return df
+    return _fetch_targets_by_go(KINASE_CONFIG, organism=organism)
 
 
 def fetch_bioactivities(
@@ -399,9 +477,20 @@ def fetch_target_class(
       GPCR aminergic config.
 
     * **GO-term discovery** (``config.uses_explicit_target_list is False``):
-      Delegates to :func:`fetch_kinase_targets` (generalized via the existing
-      ``_extract_kinase_records`` GO-filter logic) to discover targets, then
-      fetches their activities.  This is the path used by the kinase config.
+      Calls :func:`_fetch_targets_by_go` with the supplied ``config`` so that
+      ``config.go_terms`` drives GO-term filtering (not the module-level
+      ``KINASE_GO_TERMS`` constant).  This is the path used by the kinase
+      config.
+
+    .. note:: Schema difference between the two paths
+
+        The ``targets_df`` returned by the two paths have different schemas.
+        The explicit-ID path returns a minimal frame with columns
+        ``[target_chembl_id, subfamily]``.  The GO-discovery path returns the
+        richer kinase frame (``pref_name``, ``kinase_group``, ``gene_symbol``,
+        etc.).  This is intentional: downstream ``curate_activities`` derives
+        subfamily from ``kinase_group`` for GO-based classes and from
+        ``config.subfamily_map`` for explicit-list classes.
 
     Parameters
     ----------
@@ -457,11 +546,14 @@ def fetch_target_class(
             config.class_name,
         )
 
-        targets_df = fetch_kinase_targets(organism=organism)
+        targets_df = _fetch_targets_by_go(config, organism=organism)
+
+        # Slice both targets_df and the activity query to the same N targets
+        # so the returned pair is aligned.
+        if max_targets is not None:
+            targets_df = targets_df.iloc[:max_targets].reset_index(drop=True)
 
         target_ids = targets_df["target_chembl_id"].tolist()
-        if max_targets is not None:
-            target_ids = target_ids[:max_targets]
 
         activities_df = fetch_bioactivities(
             target_chembl_ids=target_ids,
