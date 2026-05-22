@@ -260,6 +260,7 @@ def curate_activities(
     config: TargetClassConfig,
     dataset_config: dict,
     raw_dir: Path = Path("data/raw"),
+    stats: dict | None = None,
 ) -> pd.DataFrame:
     """Curate raw ChEMBL activities for any target class.
 
@@ -287,6 +288,11 @@ def curate_activities(
     raw_dir : Path
         Directory containing the raw parquet files.  Defaults to
         ``Path("data/raw")``.
+    stats : dict, optional
+        If provided, the standardization step's stats dict will be stored
+        under ``stats["standardization"]``.  Pass a fresh ``{}`` from
+        ``main()`` to recover the value for ``curation_stats.json`` without
+        changing the function's ``-> pd.DataFrame`` return type.
 
     Returns
     -------
@@ -323,7 +329,9 @@ def curate_activities(
 
     # --- Step 2: Standardize molecules ---
     logger.info("=== Step 2: Standardizing molecules ===")
-    df, std_stats = standardize_dataframe(df, config=dataset_config)  # noqa: F841
+    df, std_stats = standardize_dataframe(df, config=dataset_config)
+    if stats is not None:
+        stats["standardization"] = std_stats
 
     # --- Step 3: Convert to pActivity ---
     logger.info("=== Step 3: Converting to pActivity ===")
@@ -378,7 +386,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Steps 1–6: Load, standardize, pActivity, dedup, filter, label ---
-    df = curate_activities(KINASE_CONFIG, dataset_config, raw_dir=RAW_DATA_DIR)
+    curation_meta: dict = {}
+    df = curate_activities(KINASE_CONFIG, dataset_config, raw_dir=RAW_DATA_DIR, stats=curation_meta)
 
     # --- Step 7: Save curated dataset ---
     logger.info("=== Step 7: Saving curated dataset ===")
@@ -407,6 +416,7 @@ def main() -> None:
 
     # --- Step 9: Save curation statistics ---
     stats = {
+        "standardization": curation_meta["standardization"],
         "n_curated_records": len(df),
         "n_unique_compounds": int(df["std_smiles"].nunique()),
         "n_unique_targets": int(df["target_chembl_id"].nunique()),
