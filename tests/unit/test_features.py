@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 import yaml
 
 
@@ -127,3 +126,49 @@ class TestDataDirParameter:
             assert Path(path).is_relative_to(tmp_path), (
                 f"Output '{key}' landed outside data_dir: {path}"
             )
+
+    def test_load_rdkit_descriptors_reads_from_data_dir(self, tmp_path):
+        """load_rdkit_descriptors(data_dir=...) reads from the supplied directory."""
+        from target_affinity_ml.features import load_rdkit_descriptors
+
+        # Build synthetic fixture under tmp_path/v1/features/
+        features_dir = tmp_path / "v1" / "features"
+        features_dir.mkdir(parents=True)
+
+        smiles = ["c1ccccc1", "CCO"]
+        desc_matrix = np.ones((2, 5), dtype=np.float32)
+        desc_names = ["MW", "LogP", "HBA", "HBD", "TPSA"]
+        np.savez_compressed(
+            features_dir / "rdkit_descriptors.npz",
+            descriptors=desc_matrix,
+            descriptor_names=np.array(desc_names),
+        )
+        with open(features_dir / "smiles_index.json", "w") as f:
+            json.dump(smiles, f)
+
+        matrix_out, names_out, smiles_out = load_rdkit_descriptors(
+            version="v1", data_dir=tmp_path
+        )
+
+        assert matrix_out.shape == (2, 5)
+        assert names_out == desc_names
+        assert smiles_out == smiles
+
+    def test_load_esm2_embeddings_reads_from_data_dir(self, tmp_path):
+        """load_esm2_embeddings(data_dir=...) reads from the supplied directory."""
+        from target_affinity_ml.features import load_esm2_embeddings
+
+        # Build synthetic fixture under tmp_path/v1/features/
+        features_dir = tmp_path / "v1" / "features"
+        features_dir.mkdir(parents=True)
+
+        target_to_row = {"CHEMBL279": 0, "CHEMBL340": 1}
+        emb_matrix = np.eye(2, dtype=np.float32)
+        np.savez_compressed(features_dir / "esm2_embeddings.npz", embeddings=emb_matrix)
+        with open(features_dir / "target_index.json", "w") as f:
+            json.dump(target_to_row, f)
+
+        emb_out, target_to_row_out = load_esm2_embeddings(version="v1", data_dir=tmp_path)
+
+        assert emb_out.shape == (2, 2)
+        assert target_to_row_out == target_to_row
