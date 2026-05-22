@@ -49,8 +49,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from target_affinity_ml.data.chembl_fetcher import KINASE_CONFIG
 from target_affinity_ml.data.splits import create_splits, save_splits
 from target_affinity_ml.data.standardize import standardize_dataframe
+from target_affinity_ml.data.target_class_config import TargetClassConfig
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +256,111 @@ def add_classification_labels(
     return df
 
 
+def curate_activities(
+    config: TargetClassConfig,
+    dataset_config: dict,
+    raw_dir: Path = Path("data/raw"),
+) -> pd.DataFrame:
+    """Curate raw ChEMBL activities for any target class.
+
+    Loads raw parquet files, applies standardization, pActivity conversion,
+    duplicate handling, quality filters, and classification labels.  Always
+    returns a DataFrame that has a ``subfamily`` column, populated by one of
+    two paths depending on *config*:
+
+    * **GO-based classes** (``config.uses_explicit_target_list`` is False):
+      merges ``raw_targets_filename`` and renames ``kinase_group`` →
+      ``subfamily``.
+    * **Explicit-target-list classes** (``config.uses_explicit_target_list``
+      is True): maps each row's ``target_chembl_id`` through
+      ``config.subfamily_map``.
+
+    Parameters
+    ----------
+    config : TargetClassConfig
+        Declares filenames, GO terms / explicit target IDs, and the
+        subfamily map for this target class.
+    dataset_config : dict
+        Full dataset configuration (same structure as ``dataset_v1.yaml``).
+        Keys consumed: ``standardization``, ``duplicates``, ``quality``,
+        ``classification``.
+    raw_dir : Path
+        Directory containing the raw parquet files.  Defaults to
+        ``Path("data/raw")``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Curated, labelled activity DataFrame ready for splitting.
+    """
+    # --- Step 1: Load raw data ---
+    logger.info("=== Step 1: Loading raw data ===")
+    raw_path = raw_dir / config.raw_activities_filename
+    df = pd.read_parquet(raw_path)
+    logger.info("Loaded %d raw activity records", len(df))
+
+    if config.uses_explicit_target_list:
+        # Explicit-target-list path (e.g. GPCR aminergic):
+        # subfamily comes from config.subfamily_map; no targets file needed.
+        pass
+    else:
+        # GO-based path (e.g. kinase): merge target metadata from file.
+        targets_path = raw_dir / config.raw_targets_filename
+        if targets_path.exists():
+            targets_df = pd.read_parquet(targets_path)
+            # Select columns that are always present plus kinase_group if present.
+            base_cols = ["target_chembl_id", "pref_name", "gene_symbol"]
+            extra_cols = [c for c in ["kinase_group"] if c in targets_df.columns]
+            target_info = targets_df[base_cols + extra_cols].drop_duplicates(
+                subset=["target_chembl_id"]
+            )
+            df = df.merge(target_info, on="target_chembl_id", how="left")
+            logger.info("Merged target metadata from %s", targets_path)
+            # Rename kinase_group -> subfamily for class-agnostic output.
+            if "kinase_group" in df.columns:
+                df = df.rename(columns={"kinase_group": "subfamily"})
+                logger.info("Renamed 'kinase_group' -> 'subfamily'")
+
+    # --- Step 2: Standardize molecules ---
+    logger.info("=== Step 2: Standardizing molecules ===")
+    df, std_stats = standardize_dataframe(df, config=dataset_config)  # noqa: F841
+
+    # --- Step 3: Convert to pActivity ---
+    logger.info("=== Step 3: Converting to pActivity ===")
+    df = convert_to_pactivity(df)
+
+    # --- Step 4: Handle duplicates ---
+    logger.info("=== Step 4: Handling duplicates ===")
+    dup_config = dataset_config["duplicates"]
+    df = handle_duplicates(
+        df,
+        aggregation=dup_config["aggregation"],
+        noise_std_threshold=dup_config["noise_std_threshold"],
+        min_measurements=dup_config["min_measurements_for_noise_flag"],
+    )
+
+    # --- Step 5: Quality filters ---
+    logger.info("=== Step 5: Applying quality filters ===")
+    qual_config = dataset_config["quality"]
+    df = apply_quality_filters(
+        df,
+        pactivity_min=qual_config["pactivity_min"],
+        pactivity_max=qual_config["pactivity_max"],
+    )
+
+    # --- Step 6: Classification labels ---
+    logger.info("=== Step 6: Adding classification labels ===")
+    cls_config = dataset_config["classification"]
+    df = add_classification_labels(df, threshold=cls_config["active_pactivity_threshold"])
+
+    # --- Explicit-target-list: attach subfamily from map ---
+    if config.uses_explicit_target_list:
+        df["subfamily"] = df["target_chembl_id"].map(config.subfamily_map)
+        logger.info("Populated 'subfamily' from config.subfamily_map")
+
+    return df
+
+
 def main() -> None:
     """Run the full curation pipeline: standardize -> curate -> split."""
     parser = argparse.ArgumentParser(description="Curate kinase bioactivity dataset")
@@ -264,60 +371,14 @@ def main() -> None:
     args = parser.parse_args()
 
     with open(args.config) as f:
-        config = yaml.safe_load(f)
+        dataset_config = yaml.safe_load(f)
 
-    version = config["version"]
+    version = dataset_config["version"]
     output_dir = PROCESSED_DIR / version
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Step 1: Load raw data ---
-    logger.info("=== Step 1: Loading raw data ===")
-    raw_path = RAW_DATA_DIR / "chembl_kinase_activities.parquet"
-    df = pd.read_parquet(raw_path)
-    logger.info("Loaded %d raw activity records", len(df))
-
-    # Also load target metadata for enriching the dataset
-    targets_path = RAW_DATA_DIR / "chembl_kinase_targets.parquet"
-    if targets_path.exists():
-        targets_df = pd.read_parquet(targets_path)
-        # Merge kinase group and gene symbol into activities
-        target_info = targets_df[
-            ["target_chembl_id", "pref_name", "kinase_group", "gene_symbol"]
-        ].drop_duplicates(subset=["target_chembl_id"])
-        df = df.merge(target_info, on="target_chembl_id", how="left")
-        logger.info("Merged kinase metadata from targets file")
-
-    # --- Step 2: Standardize molecules ---
-    logger.info("=== Step 2: Standardizing molecules ===")
-    df, std_stats = standardize_dataframe(df, config=config)
-
-    # --- Step 3: Convert to pActivity ---
-    logger.info("=== Step 3: Converting to pActivity ===")
-    df = convert_to_pactivity(df)
-
-    # --- Step 4: Handle duplicates ---
-    logger.info("=== Step 4: Handling duplicates ===")
-    dup_config = config["duplicates"]
-    df = handle_duplicates(
-        df,
-        aggregation=dup_config["aggregation"],
-        noise_std_threshold=dup_config["noise_std_threshold"],
-        min_measurements=dup_config["min_measurements_for_noise_flag"],
-    )
-
-    # --- Step 5: Quality filters ---
-    logger.info("=== Step 5: Applying quality filters ===")
-    qual_config = config["quality"]
-    df = apply_quality_filters(
-        df,
-        pactivity_min=qual_config["pactivity_min"],
-        pactivity_max=qual_config["pactivity_max"],
-    )
-
-    # --- Step 6: Classification labels ---
-    logger.info("=== Step 6: Adding classification labels ===")
-    cls_config = config["classification"]
-    df = add_classification_labels(df, threshold=cls_config["active_pactivity_threshold"])
+    # --- Steps 1–6: Load, standardize, pActivity, dedup, filter, label ---
+    df = curate_activities(KINASE_CONFIG, dataset_config, raw_dir=RAW_DATA_DIR)
 
     # --- Step 7: Save curated dataset ---
     logger.info("=== Step 7: Saving curated dataset ===")
@@ -335,7 +396,7 @@ def main() -> None:
     for strategy in ["random", "scaffold", "target"]:
         logger.info("Creating %s split...", strategy)
         try:
-            splits = create_splits(df, strategy=strategy, config=config)
+            splits = create_splits(df, strategy=strategy, config=dataset_config)
             save_splits(splits, splits_dir / f"{strategy}_split.json")
             logger.info(
                 "  %s split: train=%d, val=%d, test=%d",
@@ -346,7 +407,6 @@ def main() -> None:
 
     # --- Step 9: Save curation statistics ---
     stats = {
-        "standardization": std_stats,
         "n_curated_records": len(df),
         "n_unique_compounds": int(df["std_smiles"].nunique()),
         "n_unique_targets": int(df["target_chembl_id"].nunique()),
