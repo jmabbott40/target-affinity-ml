@@ -49,6 +49,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from target_affinity_ml.data.target_class_config import TargetClassConfig
+
 logger = logging.getLogger(__name__)
 
 RAW_DATA_DIR = Path("data/raw")
@@ -92,6 +94,14 @@ KINASE_GO_TERMS = {
 }
 
 
+KINASE_CONFIG = TargetClassConfig(
+    class_name="kinase",
+    go_terms=KINASE_GO_TERMS,
+    name_keywords=["kinase"],
+    raw_filename_stem="chembl_kinase",
+)
+
+
 def _classify_kinase(go_ids: set[str]) -> str:
     """Assign a broad kinase group from GO term annotations."""
     if go_ids & {"GO:0004713", "GO:0004714", "GO:0004715"}:
@@ -101,6 +111,17 @@ def _classify_kinase(go_ids: set[str]) -> str:
     if go_ids & {"GO:0004712"}:
         return "Dual-specificity kinase"
     return "Other kinase"
+
+
+def _classify_subfamily(target_id: str, config: TargetClassConfig) -> str:
+    """Look up a target's subfamily from the config's subfamily_map.
+
+    Returns the mapped subfamily name, or "unknown" if the target is not in
+    the map. For kinases, use ``_classify_kinase`` on GO IDs instead; this
+    function is used for configs that carry an explicit subfamily_map (e.g.,
+    the GPCR aminergic config).
+    """
+    return config.subfamily_map.get(target_id, "unknown")
 
 
 def _is_kinase_by_name(target: dict) -> bool:
@@ -357,6 +378,97 @@ def fetch_bioactivities(
         )
 
     return df
+
+
+def fetch_target_class(
+    config: TargetClassConfig,
+    organism: str = "Homo sapiens",
+    activity_types: list[str] | None = None,
+    max_targets: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch targets and bioactivities for any protein target class.
+
+    This is the class-agnostic orchestrator that replaces calling
+    ``fetch_kinase_targets`` + ``fetch_bioactivities`` directly.  It selects
+    the target-discovery strategy based on ``config``:
+
+    * **Explicit ID list** (``config.uses_explicit_target_list is True``):
+      The target set is exactly ``config.explicit_target_ids``; GO discovery is
+      skipped.  A minimal targets DataFrame is built from the ID list and the
+      bioactivities are fetched for those IDs.  This is the path used by the
+      GPCR aminergic config.
+
+    * **GO-term discovery** (``config.uses_explicit_target_list is False``):
+      Delegates to :func:`fetch_kinase_targets` (generalized via the existing
+      ``_extract_kinase_records`` GO-filter logic) to discover targets, then
+      fetches their activities.  This is the path used by the kinase config.
+
+    Parameters
+    ----------
+    config : TargetClassConfig
+        Declarative description of the target class.
+    organism : str
+        Species filter applied during GO-based target discovery.
+    activity_types : list[str], optional
+        Activity types to include. Default: ["IC50", "Ki", "Kd"].
+    max_targets : int, optional
+        Limit number of targets to query (for testing).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        ``(activities_df, targets_df)`` — activities first, matching the
+        convention of the plan spec.
+    """
+    if activity_types is None:
+        activity_types = ["IC50", "Ki", "Kd"]
+
+    if config.uses_explicit_target_list:
+        # --- Explicit ID path ---
+        target_ids = config.explicit_target_ids
+        if max_targets is not None:
+            target_ids = target_ids[:max_targets]
+
+        logger.info(
+            "fetch_target_class(%s): using explicit target list (%d targets)",
+            config.class_name,
+            len(target_ids),
+        )
+
+        # Build a minimal targets DataFrame from the explicit list
+        targets_df = pd.DataFrame(
+            {
+                "target_chembl_id": target_ids,
+                "subfamily": [
+                    _classify_subfamily(tid, config) for tid in target_ids
+                ],
+            }
+        )
+
+        activities_df = fetch_bioactivities(
+            target_chembl_ids=target_ids,
+            activity_types=activity_types,
+        )
+
+    else:
+        # --- GO-term discovery path ---
+        logger.info(
+            "fetch_target_class(%s): running GO-term target discovery",
+            config.class_name,
+        )
+
+        targets_df = fetch_kinase_targets(organism=organism)
+
+        target_ids = targets_df["target_chembl_id"].tolist()
+        if max_targets is not None:
+            target_ids = target_ids[:max_targets]
+
+        activities_df = fetch_bioactivities(
+            target_chembl_ids=target_ids,
+            activity_types=activity_types,
+        )
+
+    return activities_df, targets_df
 
 
 def main() -> None:
