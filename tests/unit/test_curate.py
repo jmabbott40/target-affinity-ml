@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -124,13 +123,6 @@ def gpcr_config():
 # ---------------------------------------------------------------------------
 
 
-class TestCurateActivitiesImport:
-    """curate_activities must be importable from the module."""
-
-    def test_import(self):
-        from target_affinity_ml.data.curate import curate_activities  # noqa: F401
-
-
 class TestCurateActivitiesGoBased:
     """GO-based class (kinase): targets file present, kinase_group -> subfamily."""
 
@@ -218,6 +210,23 @@ class TestCurateActivitiesGoBased:
         assert len(result) > 0
         # No crash is the key assertion; subfamily may be absent when file is missing
 
+    def test_stats_out_param_populated(self, tmp_path, kinase_config):
+        """stats['standardization'] is populated when a dict is passed."""
+        from target_affinity_ml.data.curate import curate_activities
+
+        target_ids = ["CHEMBL1", "CHEMBL2", "CHEMBL3"]
+        raw_acts = _make_raw_activities(target_ids)
+        raw_tgts = _make_kinase_targets(target_ids)
+
+        raw_acts.to_parquet(tmp_path / kinase_config.raw_activities_filename)
+        raw_tgts.to_parquet(tmp_path / kinase_config.raw_targets_filename)
+
+        stats: dict = {}
+        curate_activities(kinase_config, MINIMAL_DATASET_CONFIG, raw_dir=tmp_path, stats=stats)
+
+        assert "standardization" in stats
+        assert isinstance(stats["standardization"], dict)
+
 
 class TestCurateActivitiesExplicitTargetList:
     """Explicit-target-list class (GPCR): subfamily from config.subfamily_map."""
@@ -282,6 +291,7 @@ class TestCurateActivitiesDefaultRawDir:
     def test_default_raw_dir_is_data_raw(self):
         """Verify the function signature has raw_dir=Path('data/raw')."""
         import inspect
+
         from target_affinity_ml.data.curate import curate_activities
 
         sig = inspect.signature(curate_activities)

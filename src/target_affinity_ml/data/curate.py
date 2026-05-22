@@ -305,11 +305,7 @@ def curate_activities(
     df = pd.read_parquet(raw_path)
     logger.info("Loaded %d raw activity records", len(df))
 
-    if config.uses_explicit_target_list:
-        # Explicit-target-list path (e.g. GPCR aminergic):
-        # subfamily comes from config.subfamily_map; no targets file needed.
-        pass
-    else:
+    if not config.uses_explicit_target_list:
         # GO-based path (e.g. kinase): merge target metadata from file.
         targets_path = raw_dir / config.raw_targets_filename
         if targets_path.exists():
