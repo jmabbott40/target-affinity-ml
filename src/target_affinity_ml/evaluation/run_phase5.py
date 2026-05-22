@@ -243,7 +243,7 @@ def analyze_single_experiment(
     worst_path = TABLES_DIR / f"worst_predictions_{model}_{split}.csv"
     # Save subset of columns for readability
     save_cols = [c for c in ["std_smiles", "target_chembl_id", "pref_name",
-                              "gene_symbol", "kinase_group", "standard_type",
+                              "gene_symbol", "subfamily", "standard_type",
                               "y_true", "y_pred", "abs_error", "signed_error",
                               "is_noisy"] if c in worst.columns]
     worst[save_cols].to_csv(worst_path, index=False)
