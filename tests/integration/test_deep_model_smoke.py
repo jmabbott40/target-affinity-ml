@@ -84,11 +84,14 @@ def _make_activities_df(smiles: list[str], n_targets: int) -> pd.DataFrame:
 
 def _make_split_indices(n: int) -> dict[str, list[int]]:
     """Random 60/20/20 split over n rows."""
-    idx = list(range(n))
-    train = idx[:12]
-    val = idx[12:16]
-    test = idx[16:]
-    return {"train": train, "val": val, "test": test}
+    idx = np.arange(n)
+    n_train = int(0.6 * n)
+    n_val = int(0.2 * n)
+    return {
+        "train": idx[:n_train].tolist(),
+        "val": idx[n_train:n_train + n_val].tolist(),
+        "test": idx[n_train + n_val:].tolist(),
+    }
 
 
 def _make_config_yaml(tmp_dir: Path) -> Path:
@@ -133,6 +136,7 @@ def test_esm_fp_mlp_smoke():
 
     # Synthetic feature arrays
     rng = np.random.default_rng(1)
+    # fp_matrix rows correspond 1-to-1 to entries in `smiles` (real loader contract).
     fp_matrix = rng.random((N_COMPOUNDS, FP_DIM), dtype=float).astype(np.float32)
     esm_matrix = rng.random((N_TARGETS, ESM_DIM), dtype=float).astype(np.float32)
     target_to_row = {f"CHEMBL000{i}": i for i in range(N_TARGETS)}
@@ -153,7 +157,8 @@ def test_esm_fp_mlp_smoke():
         # Write tiny config
         config_path = _make_config_yaml(tmp_dir)
 
-        # Redirect RESULTS_DIR so model checkpoints go to tmp
+        # Redirect RESULTS_DIR so model checkpoints, predictions, and metric files
+        # all land in tmp_path (keeps the test hermetic).
         with (
             patch(
                 "target_affinity_ml.training.deep_trainer.load_morgan_fingerprints",
@@ -187,4 +192,17 @@ def test_esm_fp_mlp_smoke():
     # Confirm the dispatcher used the ESM-FP MLP path (not GNN/fusion).
     assert metrics.get("model") == "esm_fp_mlp", (
         f"Expected model='esm_fp_mlp', got: {metrics.get('model')}"
+    )
+
+    # Ensure all core output groups are present: regression, classification,
+    # and split provenance.  Use subset (not equality) so future additions
+    # don't break this test.
+    EXPECTED_METRIC_KEYS = {
+        "model", "split",
+        "test_rmse", "test_r2",
+        "test_auroc",
+        "n_train", "n_val", "n_test",
+    }
+    assert EXPECTED_METRIC_KEYS.issubset(metrics.keys()), (
+        f"Missing expected metric keys: {EXPECTED_METRIC_KEYS - metrics.keys()}"
     )
