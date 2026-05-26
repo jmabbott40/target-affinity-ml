@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-26
+
+### Added
+
+- **`TargetClassConfig` abstraction** (`src/target_affinity_ml/data/target_class_config.py`): a
+  frozen dataclass declaring how to identify and curate a protein target class via GO terms or an
+  explicit ChEMBL ID list, with an optional `subfamily_map`. Enables kinases, GPCRs, and future
+  target classes to share the data pipeline without code duplication.
+- **Class-agnostic `fetch_target_class` orchestrator** in `chembl_fetcher.py`, plus the
+  `KINASE_CONFIG` constant that reproduces the prior kinase-only behaviour. Existing functions
+  `fetch_kinase_targets` and `fetch_bioactivities` are preserved unchanged for full backward
+  compatibility.
+- **Class-agnostic `curate_activities(config, dataset_config, raw_dir, stats=None)`** in
+  `curate.py`. Populates a generic `subfamily` column from either the targets file (GO-based
+  classes) or `config.subfamily_map` (explicit-list classes). The optional `stats` out-param
+  threads standardization metadata back to callers.
+- **`data_dir` parameter on all four feature functions** (`compute_and_cache_features`,
+  `load_morgan_fingerprints`, `load_rdkit_descriptors`, `load_esm2_embeddings`). Default `None`
+  preserves existing relative-`PROCESSED_DIR` behaviour — the kinase application repo is
+  unaffected.
+- **Deep-model integration smoke test** (`tests/integration/test_deep_model_smoke.py`) exercising
+  `deep_train_and_evaluate` (ESM-FP MLP dispatch) on synthetic data, marked `@pytest.mark.slow`.
+  Addresses Plan 1 limitation L4.
+
+### Changed
+
+- Curated datasets now carry a generic `subfamily` column instead of the kinase-specific
+  `kinase_group`. `run_phase5.py` worst-predictions CSV column list updated accordingly.
+
+### Fixed
+
+- Removed dead `len(df)` expression statement in `splits.py`.
+
+### Backward compatibility
+
+All public APIs used by `kinase-affinity-baselines` (v1.0.0 import paths, `fetch_kinase_targets`,
+`fetch_bioactivities`, feature functions with no `data_dir` argument) continue to work without
+modification.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added

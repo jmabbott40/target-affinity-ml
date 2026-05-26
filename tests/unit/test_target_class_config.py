@@ -1,5 +1,6 @@
 """Tests for the TargetClassConfig abstraction."""
 import pytest
+
 from target_affinity_ml.data.target_class_config import TargetClassConfig
 
 

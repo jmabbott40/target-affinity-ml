@@ -13,7 +13,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from target_affinity_ml.data.chembl_fetcher import (
     KINASE_CONFIG,
