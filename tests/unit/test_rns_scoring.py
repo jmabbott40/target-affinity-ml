@@ -62,3 +62,49 @@ def test_fetch_structure_caches_correctly(tmp_path):
     _ = fetch_structure("P00533", cache_dir=tmp_path, prefer="alphafold")
     mtime_second = (tmp_path / "alphafold" / "P00533.pdb").stat().st_mtime
     assert mtime_first == mtime_second
+
+
+def test_fetch_binding_site_kinase(tmp_path):
+    """Kinase binding-site routes to KLIFS and returns ~85 residues."""
+    from target_affinity_ml.benchmarks.rns_scoring import fetch_binding_site
+    # EGFR is CHEMBL203 — well-covered by KLIFS
+    residues = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
+    assert isinstance(residues, list)
+    assert all(isinstance(r, int) for r in residues)
+    assert 60 <= len(residues) <= 100  # KLIFS canonical pocket is 85; allow drift for non-standard kinases
+
+
+def test_fetch_binding_site_gpcr(tmp_path):
+    """GPCR binding-site routes to GPCRdb and returns ~25-40 residues."""
+    from target_affinity_ml.benchmarks.rns_scoring import fetch_binding_site
+    # DRD2 is CHEMBL217 — well-covered by GPCRdb
+    residues = fetch_binding_site(
+        "CHEMBL217",
+        class_name="gpcr_aminergic",
+        cache_dir=tmp_path,
+        uniprot_id="P14416",  # provide UniProt as fallback
+    )
+    assert isinstance(residues, list)
+    assert all(isinstance(r, int) for r in residues)
+    # GPCRdb orthosteric pocket sizes vary; accept a broad range
+    assert 10 <= len(residues) <= 60
+
+
+def test_fetch_binding_site_missing_target_returns_empty(tmp_path):
+    """A target not in KLIFS returns empty list (and logs WARNING) — does NOT raise."""
+    from target_affinity_ml.benchmarks.rns_scoring import fetch_binding_site
+    residues = fetch_binding_site("CHEMBL_INVALID_999", class_name="kinase", cache_dir=tmp_path)
+    assert residues == []
+
+
+def test_fetch_binding_site_caches_correctly(tmp_path):
+    """Re-querying the same target reads cached JSON, not the API."""
+    from target_affinity_ml.benchmarks.rns_scoring import fetch_binding_site
+    _ = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
+    cache_file = tmp_path / "binding_sites" / "kinase_CHEMBL203.json"
+    assert cache_file.exists()
+    # Mtime check (Plan 2 pattern)
+    mtime_first = cache_file.stat().st_mtime
+    import time as _t; _t.sleep(0.01)
+    _ = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
+    assert cache_file.stat().st_mtime == mtime_first
