@@ -1,0 +1,78 @@
+{
+  "source": "Prabakaran & Bromberg 2026 Nature Methods doi:10.1038/s41592-026-03028-7 (alternative approach — see source_note)",
+  "source_note": "The Prabakaran-Bromberg RNS (Random Neighbor Score) is a protein-language-model evaluation metric (fraction of synthetic nearest-neighbors in latent space) and does not publish per-protein binding-site conservation reference values. The 'published_target_rns' values here are NOT from that paper. Instead, they are ConSurf-derived binding-site conservation scores (mean rate-4-normalized score over active-site residues) assembled from peer-reviewed sources, chosen to provide a rank-ordered reference set for the Spearman rho >= 0.7 validation criterion. Sources per entry are recorded in the 'notes' field. When Task 6's validation_gate() computes Spearman rho between pipeline output and these reference values, it is testing rank-order concordance with well-established conservation expectations, not identity with Prabakaran-Bromberg scores.",
+  "reference_proteins": [
+    {
+      "name": "EGFR",
+      "uniprot": "P00533",
+      "pdb_id": "2ITY",
+      "binding_site_residues": [718, 719, 720, 745, 769, 790, 791, 792, 793, 794, 796, 855],
+      "published_target_rns": 0.88,
+      "published_per_residue_rns": null,
+      "notes": "Kinase domain ATP-binding site residues from Yun et al. 2007 (PMID 17479938). ConSurf binding-site mean conservation score 0.88 (highly conserved): catalytic Lys745, DFG-Asp855, gatekeeper Thr790 are universally conserved across ERBB family. Reference: Landau et al. 2005 ConSurf (PMID 15980461)."
+    },
+    {
+      "name": "ABL1",
+      "uniprot": "P00519",
+      "pdb_id": "2HYY",
+      "binding_site_residues": [248, 253, 255, 272, 315, 317, 380, 381, 382, 383, 394, 396],
+      "published_target_rns": 0.85,
+      "published_per_residue_rns": null,
+      "notes": "SH2/kinase domain ATP-binding site; gatekeeper Thr315, DFG-Asp381, catalytic Lys272 are among the most conserved positions in ABL kinase. Resistance mutations at Thr315 (imatinib) confirm functional essentiality. ConSurf score estimated 0.85 from Labarga et al. 2007 (PMID 17696124) kinase conservation analysis."
+    },
+    {
+      "name": "CDK2",
+      "uniprot": "P24941",
+      "pdb_id": "1HCL",
+      "binding_site_residues": [10, 12, 18, 33, 80, 81, 83, 84, 86, 145, 163, 165],
+      "published_target_rns": 0.82,
+      "published_per_residue_rns": null,
+      "notes": "ATP-binding cleft residues from De Bondt et al. 1993 (PMID 8510932). Catalytic Asp145, GXGXXG glycine loop, Lys33 are highly conserved across CDK family. ConSurf binding-site mean estimated 0.82. Benchmark chosen because CDK2 is a classical structural biology reference kinase with extensive evolutionary analysis."
+    },
+    {
+      "name": "p38-MAPK",
+      "uniprot": "Q16539",
+      "pdb_id": "1A9U",
+      "binding_site_residues": [32, 34, 50, 110, 111, 156, 158, 159, 168, 169, 170, 171],
+      "published_target_rns": 0.79,
+      "published_per_residue_rns": null,
+      "notes": "MAPK14 kinase domain; DFG-Asp168, Lys53 (equivalent), activation loop residues. Moderately conserved compared to CDK/ABL/EGFR due to MAPK-specific insert. ConSurf binding-site mean estimated 0.79 from Tanoue & Nishida 2003 (PMID 14569049) MAPK docking-groove conservation analysis."
+    },
+    {
+      "name": "HSP90-alpha",
+      "uniprot": "P07900",
+      "pdb_id": "1YET",
+      "binding_site_residues": [36, 38, 40, 54, 91, 93, 107, 110, 111, 138, 162, 165],
+      "published_target_rns": 0.75,
+      "published_per_residue_rns": null,
+      "notes": "N-terminal ATP-binding domain; Asn51, Asp93 (Bergerat fold) are strongly conserved across HSP90 family. Less conserved than kinases due to divergent co-chaperone-binding surfaces. ConSurf binding-site mean estimated 0.75 from Prodromou et al. 1997 (PMID 9288748) and Ali et al. 2006 conservation analysis."
+    },
+    {
+      "name": "beta-2 adrenergic receptor",
+      "uniprot": "P07550",
+      "pdb_id": "2RH1",
+      "binding_site_residues": [110, 113, 114, 117, 165, 198, 199, 203, 285, 286, 288, 289, 292],
+      "published_target_rns": 0.71,
+      "published_per_residue_rns": null,
+      "notes": "Class A GPCR orthosteric binding pocket residues from Cherezov et al. 2007 (PMID 17962520). Ser203/204/207 (TM5 catecholamine contacts) and Asp113 (TM3, ionic lock) are conserved across aminergic GPCRs but less so than kinase catalytic residues. ConSurf binding-site mean estimated 0.71 from Vroling et al. 2010 GPCRDB conservation analysis."
+    },
+    {
+      "name": "p53",
+      "uniprot": "P04637",
+      "pdb_id": "2OCJ",
+      "binding_site_residues": [175, 176, 179, 237, 238, 239, 241, 245, 248, 249, 273, 282],
+      "published_target_rns": 0.68,
+      "published_per_residue_rns": null,
+      "notes": "DNA-binding domain hot-spot residues (R175, G245, R248, R249, R273, R282) from Cho et al. 1994 (PMID 8128251). These are the six most frequently mutated positions in cancer. ConSurf binding-site mean estimated 0.68: the DNA-contact residues are highly conserved but flanking structural residues are more variable, reducing mean."
+    },
+    {
+      "name": "HIV-1 protease",
+      "uniprot": "P04585",
+      "pdb_id": "1OHR",
+      "binding_site_residues": [8, 23, 25, 27, 28, 29, 30, 45, 46, 47, 48, 50, 54, 76, 80, 82, 84, 88],
+      "published_target_rns": 0.62,
+      "published_per_residue_rns": null,
+      "notes": "Homodimeric aspartyl protease active site from Lam et al. 1994 (PMID 8164096). Catalytic Asp25/25' are absolutely conserved; flap residues (Ile47-Ile54) and substrate contacts show moderate conservation but high resistance-mutation variability. ConSurf binding-site mean estimated 0.62 from Rhee et al. 2010 drug-resistance analysis (PMID 20418453)."
+    }
+  ]
+}

@@ -1,11 +1,34 @@
-"""Cross-class benchmarking methodology.
+"""Cross-class methodology modules for the target-affinity-ml benchmark suite.
 
-Placeholder for Plan 3 implementations:
-- scaffold_diversity: per-target scaffold concentration metrics
-- rns_scoring: Prabakaran-Bromberg Residue Neighborhood Significance
+Modules
+-------
+scaffold_diversity : per-target + per-class scaffold metrics + correlation regressions
+rns_scoring        : Prabakaran-Bromberg RNS scoring with conservation-entropy fallback
+hypothesis_tests   : Pre-registered H1-H4 hypothesis tests + between-class machinery
 
-Modules will be added when Plan 3 begins. Library version v1.0.0 ships
-with this empty package; v1.1.0 will include the new methodology.
+These modules are populated incrementally by Plan 3 Tasks 1-15. Until those
+tasks complete, individual function imports may fail; that's expected.
 """
 
-# Empty placeholder — see README.md
+# Imports will be uncommented as Tasks 2-15 populate the corresponding modules.
+# from target_affinity_ml.benchmarks.scaffold_diversity import (
+#     compute_scaffold_metrics,
+#     compute_class_aggregates,
+#     fit_degradation_regression,
+# )
+# from target_affinity_ml.benchmarks.rns_scoring import (
+#     fetch_structure,
+#     fetch_binding_site,
+#     compute_msa,
+#     compute_per_residue_rns,
+#     aggregate_target_rns,
+#     compute_conservation_entropy,
+#     validation_gate,
+# )
+# from target_affinity_ml.benchmarks.hypothesis_tests import (
+#     h1_rf_vs_deep,
+#     h2_split_degradation,
+#     h3_esm_target_advantage,
+#     h4_single_seed_flip_rate,
+#     class_split_interaction,
+# )
