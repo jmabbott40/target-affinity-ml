@@ -16,8 +16,9 @@ tasks complete, individual function imports may fail; that's expected.
 #     compute_class_aggregates,
 #     fit_degradation_regression,
 # )
+from target_affinity_ml.benchmarks.rns_scoring import fetch_structure  # noqa: F401
+
 # from target_affinity_ml.benchmarks.rns_scoring import (
-#     fetch_structure,
 #     fetch_binding_site,
 #     compute_msa,
 #     compute_per_residue_rns,

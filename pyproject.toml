@@ -43,6 +43,12 @@ deep = [
     "torch-geometric>=2.4",
     "fair-esm>=2.0.0",
 ]
+benchmarks = [
+    "biopython>=1.81",
+    "statsmodels>=0.14",
+    "matplotlib>=3.7",
+    "freesasa>=2.2",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
