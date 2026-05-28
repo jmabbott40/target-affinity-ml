@@ -63,6 +63,15 @@ Homepage = "https://github.com/jmabbott40/target-affinity-ml"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Bundle non-Python data files (e.g. RNS validation-gate reference values) so they
+# travel with pip installs. Without this declaration, setuptools' default packaging
+# only globs *.py files and silently drops *.json / *.yaml / *.txt — which caused
+# the Plan 3 validation gate to fail on a fresh AWS install (FileNotFoundError on
+# _rns_reference_data.json that exists in the source tree but not the installed
+# package). The bundle pattern covers any future data file in benchmarks/.
+"target_affinity_ml.benchmarks" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
