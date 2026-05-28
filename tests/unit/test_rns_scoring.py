@@ -228,9 +228,8 @@ def _build_tiny_structure_with_known_geometry():
 
     This means:
       - Residues 1, 2, 3 are all mutually within 8 Å of each other.
-      - Residue 4 is 8.0 Å from residue 2 (just at the boundary) and 7.6 Å
-        from residue 3, so it counts as a neighbor of 3 but just at/over the
-        boundary for 2.
+      - Residue 4 is 7.6 Å from residue 2 (within the boundary) and 3.8 Å
+        from residue 3, so it counts as a neighbor of both residue 2 and 3.
       - Residue 5 (15.2 Å from residue 1) is far from 1-3 and outside the
         8 Å radius for residues 1-3.
 
@@ -322,23 +321,35 @@ def _build_synthetic_msa(
 
 
 def _build_synthetic_msa_with_varying_conservation() -> str:
-    """Return a Stockholm MSA where position 2 is highly conserved (all 'A')
-    and position 3 is maximally variable (each sequence has a different AA).
+    """Return a Stockholm MSA where positions 1-2 are highly conserved (all 'A')
+    and positions 3-5 are maximally variable (each sequence has a different AA).
 
     The MSA has 10 sequences, each of length 5.  Column index 1 is position 1,
     column index 2 is position 2, etc. (1-based, no gaps in the query).
+
+    Conservation pattern:
+      Col 1: all 'A' (conserved)
+      Col 2: all 'A' (conserved)
+      Col 3: K/C/E/G/I/P/R/V/Y/H (variable, 10 distinct AAs)
+      Col 4: L/F/V/W/M/Q/S/T/N/H (variable, 10 distinct AAs)
+      Col 5: D/E/F/G/H/I/K/L/M/N (variable, 10 distinct AAs)
+
+    With sequence_window=1 and the 5-residue test structure:
+      residue 2's neighborhood covers cols 1-4 (2 conserved + 2 variable)
+      residue 3's neighborhood covers cols 1-5 (2 conserved + 3 variable)
+    So residue 2 gets a strictly higher RNS score than residue 3.
     """
     seqs = {
         "query": "AAKLD",
-        "seq1":  "AACFD",
-        "seq2":  "AAEVD",
-        "seq3":  "AAGWD",
-        "seq4":  "AAIMD",
-        "seq5":  "AAPQD",
-        "seq6":  "AARSD",
-        "seq7":  "AAVTD",
-        "seq8":  "AAYND",
-        "seq9":  "AAHHD",
+        "seq1":  "AACFE",
+        "seq2":  "AAEVF",
+        "seq3":  "AAGWG",
+        "seq4":  "AAIMH",
+        "seq5":  "AAPQI",
+        "seq6":  "AARSK",
+        "seq7":  "AAVTL",
+        "seq8":  "AAYNM",
+        "seq9":  "AAHHN",
     }
     lines = ["# STOCKHOLM 1.0"]
     for name, seq in seqs.items():
@@ -367,20 +378,31 @@ def test_compute_per_residue_rns_returns_normalized_scores(tmp_path):
 
 
 def test_compute_per_residue_rns_higher_score_for_more_conserved(tmp_path):
-    """A residue with a more-conserved neighborhood gets a higher RNS than one with a more-variable neighborhood."""
+    """A residue with a more-conserved neighborhood gets a higher RNS than one with a more-variable neighborhood.
+
+    Uses sequence_window=1 so that residue 2's sequence neighbourhood (cols 1-3)
+    and residue 3's sequence neighbourhood (cols 2-4) don't fully overlap on
+    the 5-residue test structure.  Combined with the spatial neighbourhood
+    (residue 2 sees cols 1-4; residue 3 sees cols 1-5), residue 2 ends up with
+    2 conserved columns out of 4 while residue 3 has 2 conserved columns out of 5.
+    The assertion is strict (>) because the conservation difference is real, not vacuous.
+    """
     from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns
 
     structure = _build_tiny_structure_with_known_geometry()
     msa_path = tmp_path / "test.sto"
-    # Position 2 is highly conserved (all sequences agree);
-    # position 3 is variable across the 10 sequences
+    # Positions 1-2 are conserved (all 'A'); positions 3-5 are maximally variable.
     msa_path.write_text(_build_synthetic_msa_with_varying_conservation())
-    scores = compute_per_residue_rns(structure, binding_site=[2, 3], msa_path=msa_path)
-    if 2 in scores and 3 in scores:
-        assert scores[2] >= scores[3], (
-            f"Expected conserved residue (pos 2, score {scores[2]:.4f}) >= "
-            f"variable residue (pos 3, score {scores[3]:.4f})"
-        )
+    scores = compute_per_residue_rns(
+        structure, binding_site=[2, 3], msa_path=msa_path, sequence_window=1
+    )
+    assert 2 in scores and 3 in scores, (
+        f"Both binding-site residues must appear in scores; got keys: {set(scores)}"
+    )
+    assert scores[2] > scores[3], (
+        f"Expected conserved residue (pos 2, score {scores[2]:.4f}) > "
+        f"variable residue (pos 3, score {scores[3]:.4f})"
+    )
 
 
 def test_compute_per_residue_rns_skips_missing_residue(tmp_path):
