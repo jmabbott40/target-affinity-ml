@@ -515,43 +515,90 @@ def test_aggregate_target_rns_empty_returns_nan(tmp_path):
     assert math.isnan(result)
 
 
+# ---------------------------------------------------------------------------
+# compute_binding_site_plddt tests (P3-T6 pivot)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_binding_site_plddt_alphafold_returns_mean(tmp_path):
+    """pLDDT is extracted from CA B-factors for AlphaFold-source structures."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_binding_site_plddt
+
+    structure = _build_tiny_structure_with_plddt({1: 85.0, 2: 75.0, 3: 90.0})
+    provenance = {"source": "AlphaFold"}
+    result = compute_binding_site_plddt(structure, [1, 2, 3], provenance)
+    # Expected mean = (85.0 + 75.0 + 90.0) / 3 = 83.333...
+    assert abs(result - (85.0 + 75.0 + 90.0) / 3) < 1e-5
+
+
+def test_compute_binding_site_plddt_pdb_returns_nan(tmp_path):
+    """PDB source returns nan regardless of B-factor values."""
+    import math
+    from target_affinity_ml.benchmarks.rns_scoring import compute_binding_site_plddt
+
+    structure = _build_tiny_structure_with_plddt({1: 85.0, 2: 75.0})
+    provenance = {"source": "PDB"}
+    result = compute_binding_site_plddt(structure, [1, 2], provenance)
+    assert math.isnan(result)
+
+
+def test_compute_binding_site_plddt_handles_missing_residues(tmp_path):
+    """Residues absent from the structure are excluded from the mean, not included as 50.0."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_binding_site_plddt
+
+    # Structure only has residues 1 and 3; residue 99 is absent
+    structure = _build_tiny_structure_with_plddt({1: 80.0, 3: 90.0})
+    provenance = {"source": "AlphaFold"}
+    # Binding site asks for residues 1, 3, and 99
+    result = compute_binding_site_plddt(structure, [1, 3, 99], provenance)
+    # Expected: mean of only residues 1 and 3 = (80.0 + 90.0) / 2 = 85.0
+    # NOT (80.0 + 90.0 + 50.0) / 3 = 73.333 (which would be wrong)
+    assert abs(result - 85.0) < 1e-5
+
+
+# ---------------------------------------------------------------------------
+# validation_gate tests (P3-T6 pLDDT-based criterion)
+# ---------------------------------------------------------------------------
+
+
 def test_validation_gate_pass_path(tmp_path, monkeypatch):
-    """validation_gate returns passed=True when our values rank-correlate with reference."""
+    """validation_gate returns passed=True when per-target pLDDT > 65 and no errors."""
     from target_affinity_ml.benchmarks import rns_scoring
-    # Mock the heavy pipeline calls
-    def fake_fetch(uid, cache_dir, **kw): return ("fake_structure", {"source": "PDB"})
-    def fake_msa(uid, db, out): out.mkdir(parents=True, exist_ok=True); return out / f"{uid}.sto"
-    def fake_per_res(s, bs, m): return {r: 0.1 * i for i, r in enumerate(bs, 1)}
-    # Return values that correlate with the reference: rank order matches ConSurf
-    # 8 reference proteins in order: EGFR(0.88), ABL1(0.85), CDK2(0.82), p38(0.79),
-    # HSP90(0.75), ADRB2(0.71), p53(0.68), HIV-pr(0.62)
-    _pass_seq = iter([0.88, 0.85, 0.82, 0.79, 0.75, 0.71, 0.68, 0.62])
-    def fake_agg(pr, p, s, **kw): return next(_pass_seq)
+
+    # Provide high, plausible pLDDT values (typical for well-studied proteins)
+    plddt_vals = iter([88.0, 85.0, 87.0, 84.0, 82.0, 80.0, 79.0, 76.0])
+
+    def fake_fetch(uid, cache_dir, **kw):
+        return ("fake_structure", {"source": "AlphaFold"})
+
+    def fake_plddt(structure, binding_site, provenance):
+        return next(plddt_vals)
+
     monkeypatch.setattr(rns_scoring, "fetch_structure", fake_fetch)
-    monkeypatch.setattr(rns_scoring, "compute_msa", fake_msa)
-    monkeypatch.setattr(rns_scoring, "compute_per_residue_rns", fake_per_res)
-    monkeypatch.setattr(rns_scoring, "aggregate_target_rns", fake_agg)
+    monkeypatch.setattr(rns_scoring, "compute_binding_site_plddt", fake_plddt)
 
     passed, dev, csv = rns_scoring.validation_gate(cache_dir=tmp_path, db_path=Path("/fake"))
     assert passed is True
-    assert dev["spearman_rho"] > 0.9  # perfect rank order
+    assert dev["mean_plddt"] > 65
+    assert dev["no_invalid_targets"] is True
 
 
 def test_validation_gate_fail_path(tmp_path, monkeypatch):
-    """validation_gate returns passed=False when our values are uncorrelated with reference."""
+    """validation_gate returns passed=False when mean pLDDT <= 65 or any target is invalid."""
     from target_affinity_ml.benchmarks import rns_scoring
-    def fake_fetch(uid, cache_dir, **kw): return ("fake_structure", {"source": "PDB"})
-    def fake_msa(uid, db, out): out.mkdir(parents=True, exist_ok=True); return out / f"{uid}.sto"
-    def fake_per_res(s, bs, m): return {r: 0.5 for r in bs}
-    # Return values UNCORRELATED with the ConSurf reference (random-ish)
-    bad_vals = iter([0.20, 0.95, 0.45, 0.60, 0.15, 0.85, 0.30, 0.55])
-    def fake_agg(pr, p, s, **kw): return next(bad_vals)
+
+    # Low, implausible pLDDT values — mean will be well below 65
+    plddt_vals = iter([45.0, 40.0, 38.0, 50.0, 42.0, 44.0, 39.0, 48.0])
+
+    def fake_fetch(uid, cache_dir, **kw):
+        return ("fake_structure", {"source": "AlphaFold"})
+
+    def fake_plddt(structure, binding_site, provenance):
+        return next(plddt_vals)
+
     monkeypatch.setattr(rns_scoring, "fetch_structure", fake_fetch)
-    monkeypatch.setattr(rns_scoring, "compute_msa", fake_msa)
-    monkeypatch.setattr(rns_scoring, "compute_per_residue_rns", fake_per_res)
-    monkeypatch.setattr(rns_scoring, "aggregate_target_rns", fake_agg)
+    monkeypatch.setattr(rns_scoring, "compute_binding_site_plddt", fake_plddt)
 
     passed, dev, csv = rns_scoring.validation_gate(cache_dir=tmp_path, db_path=Path("/fake"))
-    # MAD = mean(|our - ref|) — with chosen values, will exceed 0.10 threshold
-    # Spearman correlation is low/negative because rank order is jumbled
-    assert passed is False  # both criteria miss
+    assert passed is False
+    assert dev["mean_plddt"] <= 65

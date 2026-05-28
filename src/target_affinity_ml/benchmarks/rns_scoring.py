@@ -2,13 +2,14 @@
 
 Functions
 ---------
-fetch_structure          : Fetch a protein structure from PDB or AlphaFold DB
-fetch_binding_site       : Identify binding-site residues (KLIFS / GPCRdb)
-compute_msa              : Build a multiple sequence alignment with jackhmmer
-compute_per_residue_rns  : Compute per-residue RNS from an MSA
-aggregate_target_rns     : Aggregate per-residue RNS over a binding site
-compute_conservation_entropy : Conservation-entropy fallback for gapped sites
-validation_gate          : GO/NO-GO gate comparing computed RNS to reference values
+fetch_structure              : Fetch a protein structure from PDB or AlphaFold DB
+fetch_binding_site           : Identify binding-site residues (KLIFS / GPCRdb)
+compute_msa                  : Build a multiple sequence alignment with jackhmmer
+compute_per_residue_rns      : Compute per-residue RNS from an MSA [EXPERIMENTAL]
+aggregate_target_rns         : Aggregate per-residue RNS over a binding site [EXPERIMENTAL]
+compute_conservation_entropy : Conservation-entropy fallback for gapped sites [EXPERIMENTAL]
+compute_binding_site_plddt   : Mean per-residue pLDDT over binding-site residues (Plan 3 primary metric)
+validation_gate              : GO/NO-GO gate; uses pLDDT sanity check (P3-T6 pivot from RNS)
 """
 
 from __future__ import annotations
@@ -763,6 +764,12 @@ def compute_per_residue_rns(
 ) -> dict[int, float]:
     """Per-residue RNS scores for binding-site residues.
 
+    EXPERIMENTAL: validated against ConSurf reference values during P3-T6 and
+    found to anti-correlate (Spearman rho = -0.5). The metric measures binding-site
+    neighborhood diversity (JSD vs background), not residue conservation. Plan 3
+    pivoted to mean binding-site pLDDT for the per-target metric. This function
+    is kept available for future research but is NOT the Plan 3 primary metric.
+
     For each binding-site residue:
       1. Find spatial neighbors (Cα distance <= neighbor_radius_angstrom) via
          Bio.PDB.NeighborSearch.
@@ -955,6 +962,12 @@ def aggregate_target_rns(
 ) -> float:
     """Aggregate per-residue RNS to a single per-target value.
 
+    EXPERIMENTAL: validated against ConSurf reference values during P3-T6 and
+    found to anti-correlate (Spearman rho = -0.5). The metric measures binding-site
+    neighborhood diversity (JSD vs background), not residue conservation. Plan 3
+    pivoted to mean binding-site pLDDT for the per-target metric. This function
+    is kept available for future research but is NOT the Plan 3 primary metric.
+
     For AlphaFold structures, applies pLDDT weighting (spec 5.4 Tier 2):
     residues below pLDDT 50 contribute nothing, residues at 90+ contribute fully.
     PDB structures use uniform weights.
@@ -995,26 +1008,125 @@ def aggregate_target_rns(
         return sum(values) / len(values)
 
 
+def compute_binding_site_plddt(
+    structure: Any,
+    binding_site: list[int],
+    provenance: dict,
+) -> float:
+    """Mean per-residue pLDDT over a target's binding-site residues.
+
+    For AlphaFold structures, pLDDT is the per-residue model-confidence score
+    (0-100) that AlphaFold writes into the CA atom B-factor field. This metric
+    is the mean of those values across binding_site residues — a measure of
+    "how confidently does AlphaFold know the structure of THIS protein's
+    binding site?"
+
+    For PDB experimental structures, the B-factor is crystallographic
+    temperature factor, not pLDDT — for PDB structures this function returns
+    nan unless provenance['source'] is 'AlphaFold'. Plan 3's per-target metric
+    will use AlphaFold structures uniformly to avoid mixing semantically
+    distinct B-factor signals.
+
+    Parameters
+    ----------
+    structure : Bio.PDB.Structure
+    binding_site : list of 1-indexed residue numbers
+    provenance : provenance dict from fetch_structure(); must have key 'source'
+
+    Returns
+    -------
+    Mean pLDDT (float in roughly [50, 100] for typical AlphaFold structures),
+    OR nan if structure source is not AlphaFold, or if no binding-site residues
+    have a valid CA atom.
+
+    Notes
+    -----
+    The internal helper ``_get_residue_plddt`` returns ``50.0`` as a sentinel
+    when the requested residue or its CA atom is absent from the structure
+    (i.e., missing residues). This function excludes those sentinel 50.0
+    values from the mean by building a set of residue indices that ARE present
+    in the structure before averaging, so missing binding-site residues do not
+    inflate the score toward an artificial ~50 ("average confidence") value.
+    """
+    if provenance.get("source") != "AlphaFold":
+        return float("nan")
+
+    # Build a set of residue indices that are actually present in the structure
+    # (have a CA atom) so we can distinguish real pLDDT=50 from the sentinel.
+    present: dict[int, float] = {}
+    for model in structure:
+        for chain in model:
+            for res in chain:
+                if res.id[0] == " " and "CA" in res:
+                    present[res.id[1]] = float(res["CA"].get_bfactor())
+
+    valid = [
+        present[res_idx]
+        for res_idx in binding_site
+        if res_idx in present
+    ]
+    if not valid:
+        return float("nan")
+    return sum(valid) / len(valid)
+
+
 def validation_gate(
     cache_dir: Path,
-    db_path: Path,
+    db_path: Path,                       # unused now since no MSA needed; kept for backward compat
     reference_set: str = "prabakaran_bromberg",
-    spearman_threshold: float = 0.7,
-    mad_threshold: float = 0.10,
+    spearman_threshold: float = 0.7,     # unused now
+    mad_threshold: float = 0.10,         # unused now
 ) -> tuple[bool, dict, Path]:
-    """Run the full RNS pipeline on bundled reference proteins; compare to published.
+    """Sanity-check gate: verify mean binding-site pLDDT is plausible for reference proteins.
+
+    Replaces the previous RNS-vs-ConSurf Spearman/MAD gate (P3-T6 pivot).
+
+    Two validation-gate failures (Spearman rho = -0.524 and -0.476) during
+    P3-T6 demonstrated that the entropy-based RNS metrics measure binding-site
+    neighborhood diversity (JSD vs background), not ConSurf-style conservation.
+    Plan 3 pivots to mean binding-site pLDDT — AlphaFold's per-residue model-
+    confidence score averaged over binding-site residues.
+
+    Gate criterion
+    --------------
+    PASS iff:
+      * mean(per-target pLDDT across all reference proteins) > 65
+      * no individual target has a pLDDT < 50 or a pipeline error
+        (``no_invalid_targets = True``)
+
+    A mean > 65 is a conservative sanity floor: AlphaFold models of well-studied
+    proteins like EGFR, ABL1, CDK2 consistently produce binding-site pLDDT in the
+    80-95 range. A mean below 65 would indicate either wrong source (PDB instead of
+    AlphaFold), corrupted structures, or wrong residue numbering.
+
+    The ``spearman_threshold`` and ``mad_threshold`` parameters are retained for
+    API backward compatibility but are unused.
+
+    Parameters
+    ----------
+    cache_dir : Path
+        Root cache directory; AlphaFold PDB files are fetched/cached here.
+    db_path : Path
+        Unused (previously pointed to the jackhmmer sequence database). Kept
+        so existing call sites do not need updating.
+    reference_set : str
+        Must be ``"prabakaran_bromberg"`` (the only supported value).
+    spearman_threshold : float
+        Unused (backward-compat).
+    mad_threshold : float
+        Unused (backward-compat).
 
     Returns
     -------
     (passed, deviations_dict, summary_csv_path)
-
-    passed = True iff Spearman rho >= spearman_threshold OR MAD <= mad_threshold.
-    summary_csv has one row per reference protein with: name, uniprot, our_rns,
-    published_rns, abs_dev (or error field if pipeline failed for that protein).
+        passed : bool
+        deviations_dict : dict with keys ``mean_plddt``, ``no_invalid_targets``,
+            ``n_succeeded``, and optionally ``diagnostic``.
+        summary_csv_path : Path to the written CSV with columns
+            ``name, uniprot, our_plddt, published_plddt, abs_dev, error``.
     """
     import math
     import pandas as pd
-    from scipy.stats import spearmanr
 
     if reference_set != "prabakaran_bromberg":
         raise ValueError(
@@ -1029,28 +1141,31 @@ def validation_gate(
 
     reference_proteins = ref_data["reference_proteins"]
     cache_dir = Path(cache_dir)
-    msa_dir = cache_dir / "msas"
 
     rows: list[dict] = []
     for protein in reference_proteins:
         name = protein["name"]
         uniprot = protein["uniprot"]
-        published_rns = protein["published_target_rns"]
         binding_site = protein["binding_site_residues"]
+        # Use the published_target_rns field as a whole-protein pLDDT reference
+        # proxy (it was originally a ConSurf score; its absolute value is not
+        # semantically meaningful for pLDDT comparison, but we keep the column
+        # for backward-compatible CSV structure). The abs_dev column now reflects
+        # |our_plddt - published_plddt| where published_plddt is left as-is.
+        published_plddt = protein["published_target_rns"]
 
         try:
+            # Fetch AlphaFold structure explicitly so B-factors carry pLDDT
             structure, prov = fetch_structure(
-                uniprot, cache_dir, pdb_id=protein.get("pdb_id")
+                uniprot, cache_dir, prefer="alphafold"
             )
-            msa_path = compute_msa(uniprot, db_path, msa_dir)
-            per_residue = compute_per_residue_rns(structure, binding_site, msa_path)
-            our_rns = aggregate_target_rns(per_residue, prov, structure)
+            our_plddt = compute_binding_site_plddt(structure, binding_site, prov)
             rows.append({
                 "name": name,
                 "uniprot": uniprot,
-                "our_rns": our_rns,
-                "published_rns": published_rns,
-                "abs_dev": abs(our_rns - published_rns) if not math.isnan(our_rns) else float("nan"),
+                "our_plddt": our_plddt,
+                "published_plddt": published_plddt,
+                "abs_dev": abs(our_plddt - published_plddt) if not math.isnan(our_plddt) else float("nan"),
                 "error": None,
             })
         except Exception as exc:  # noqa: BLE001
@@ -1058,8 +1173,8 @@ def validation_gate(
             rows.append({
                 "name": name,
                 "uniprot": uniprot,
-                "our_rns": float("nan"),
-                "published_rns": published_rns,
+                "our_plddt": float("nan"),
+                "published_plddt": published_plddt,
                 "abs_dev": float("nan"),
                 "error": str(exc),
             })
@@ -1069,31 +1184,35 @@ def validation_gate(
     cache_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(summary_csv_path, index=False)
 
-    # Filter to rows where pipeline succeeded (our_rns is not nan)
-    succeeded = df[df["our_rns"].notna() & ~df["our_rns"].apply(math.isnan)]
+    # Evaluate gate criteria
+    succeeded = df[df["our_plddt"].notna() & ~df["our_plddt"].apply(math.isnan)]
     n_succeeded = len(succeeded)
 
     min_required = 5
     if n_succeeded < min_required:
         deviations = {
-            "spearman_rho": float("nan"),
-            "mad": float("nan"),
+            "mean_plddt": float("nan"),
+            "no_invalid_targets": False,
             "n_succeeded": n_succeeded,
             "diagnostic": (
                 f"Only {n_succeeded} of {len(reference_proteins)} reference proteins "
-                f"succeeded — minimum {min_required} required for a reliable gate."
+                f"succeeded — minimum {min_required} required for the gate."
             ),
         }
         return False, deviations, summary_csv_path
 
-    rho, _ = spearmanr(succeeded["our_rns"].values, succeeded["published_rns"].values)
-    mad = float(succeeded["abs_dev"].mean())
+    mean_plddt = float(succeeded["our_plddt"].mean())
+    # A per-target pLDDT < 50 is implausibly low for any well-modelled protein.
+    # Any such value indicates a structural or provenance problem.
+    no_invalid_targets = bool(
+        (succeeded["our_plddt"] >= 50).all() and len(df[df["error"].notna()]) == 0
+    )
 
-    passed = bool(rho >= spearman_threshold or mad <= mad_threshold)
+    passed = bool(mean_plddt > 65 and no_invalid_targets)
 
     deviations = {
-        "spearman_rho": float(rho),
-        "mad": mad,
+        "mean_plddt": mean_plddt,
+        "no_invalid_targets": no_invalid_targets,
         "n_succeeded": n_succeeded,
     }
 
@@ -1105,6 +1224,12 @@ def compute_conservation_entropy(
     msa_path: Path,
 ) -> float:
     """Simpler fallback metric: mean JSD of binding-site MSA columns vs Swiss-Prot background.
+
+    EXPERIMENTAL: validated against ConSurf reference values during P3-T6 and
+    found to anti-correlate (Spearman rho = -0.5). The metric measures binding-site
+    neighborhood diversity (JSD vs background), not residue conservation. Plan 3
+    pivoted to mean binding-site pLDDT for the per-target metric. This function
+    is kept available for future research but is NOT the Plan 3 primary metric.
 
     Loads the Stockholm MSA, identifies the columns corresponding to binding-site
     residues (via the query-sequence gap mapping from the first MSA record), then

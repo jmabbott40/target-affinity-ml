@@ -23,6 +23,7 @@ from target_affinity_ml.benchmarks.rns_scoring import compute_msa  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import compute_conservation_entropy  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import aggregate_target_rns  # noqa: F401
+from target_affinity_ml.benchmarks.rns_scoring import compute_binding_site_plddt  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import validation_gate  # noqa: F401
 # from target_affinity_ml.benchmarks.hypothesis_tests import (
 #     h1_rf_vs_deep,
