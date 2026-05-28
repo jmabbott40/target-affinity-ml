@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -607,3 +608,83 @@ def fetch_structure(
         "conformational_state": "unknown",
     }
     return structure, provenance
+
+
+def _fetch_uniprot_fasta(uniprot_id: str) -> str:
+    """Fetch UniProt FASTA via REST. Returns the FASTA text."""
+    r = requests.get(
+        f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.fasta", timeout=30
+    )
+    r.raise_for_status()
+    return r.text
+
+
+def compute_msa(
+    uniprot_id: str,
+    db_path: Path,
+    out_dir: Path,
+    n_iter: int = 3,
+    n_cpu: int = 4,
+) -> Path:
+    """Run jackhmmer (uniprot_id query sequence against db_path) and cache MSA.
+
+    Parameters
+    ----------
+    uniprot_id:
+        UniProt accession string (e.g. ``"P00533"`` for EGFR).
+    db_path:
+        Path to the sequence database to search (e.g. UniRef50 FASTA).
+    out_dir:
+        Directory where the query FASTA and Stockholm MSA are written.
+    n_iter:
+        Number of jackhmmer iterations (``-N`` flag).  Defaults to 3.
+    n_cpu:
+        Number of CPU threads for jackhmmer (``--cpu`` flag).  Defaults to 4.
+
+    Returns
+    -------
+    Path to the Stockholm-format MSA file at out_dir / "{uniprot_id}.sto".
+    Idempotent — if the file already exists and is non-empty, returns immediately
+    without re-running jackhmmer.
+
+    Raises
+    ------
+    RuntimeError
+        If jackhmmer exits with a nonzero return code.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    msa_path = out_dir / f"{uniprot_id}.sto"
+
+    # Cache check: return immediately if a non-empty MSA already exists
+    if msa_path.exists() and msa_path.stat().st_size > 0:
+        logger.debug("compute_msa: cache hit for %s at %s", uniprot_id, msa_path)
+        return msa_path
+
+    # Fetch query sequence from UniProt and write to disk
+    fasta_text = _fetch_uniprot_fasta(uniprot_id)
+    query_path = out_dir / f"{uniprot_id}_query.fasta"
+    query_path.write_text(fasta_text)
+
+    # Run jackhmmer
+    args = [
+        "jackhmmer",
+        "-N", str(n_iter),
+        "--cpu", str(n_cpu),
+        "-A", str(msa_path),
+        str(query_path),
+        str(db_path),
+    ]
+    logger.info(
+        "compute_msa: running jackhmmer for %s (n_iter=%d, n_cpu=%d)",
+        uniprot_id, n_iter, n_cpu,
+    )
+    result = subprocess.run(args, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"jackhmmer failed for {uniprot_id}: {result.stderr}"
+        )
+
+    return msa_path

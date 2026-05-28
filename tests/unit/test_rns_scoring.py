@@ -108,3 +108,104 @@ def test_fetch_binding_site_caches_correctly(tmp_path):
     import time as _t; _t.sleep(0.01)
     _ = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
     assert cache_file.stat().st_mtime == mtime_first
+
+
+# ---------------------------------------------------------------------------
+# compute_msa tests (P3-T4)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_msa_invokes_jackhmmer_with_expected_args(tmp_path, monkeypatch):
+    """compute_msa shells out to jackhmmer with the documented argument set
+    and writes a Stockholm-format MSA at the cached path."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
+    from pathlib import Path
+    captured_args = []
+
+    def fake_run(args, **kw):
+        captured_args.append(args)
+        # jackhmmer's -A flag is followed by the MSA output path; write a
+        # minimal valid Stockholm file so the cache check passes on re-entry
+        idx = args.index("-A")
+        out_path = Path(args[idx + 1])
+        out_path.write_text("# STOCKHOLM 1.0\nseq1 MGKLA\n//\n")
+        class R:
+            returncode = 0
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "target_affinity_ml.benchmarks.rns_scoring._fetch_uniprot_fasta",
+        lambda uid: f">sp|{uid}|TEST\nMGKLAEDIENPNN\n"
+    )
+
+    out = compute_msa(
+        "P00533",
+        db_path=Path("/fake/uniref50.fasta"),
+        out_dir=tmp_path,
+        n_iter=1,
+        n_cpu=2,
+    )
+    assert out.exists()
+    assert out == tmp_path / "P00533.sto"
+    # Confirm the jackhmmer invocation used the right flags
+    assert len(captured_args) == 1
+    args = captured_args[0]
+    assert args[0] == "jackhmmer"
+    assert "-N" in args and args[args.index("-N") + 1] == "1"
+    assert "--cpu" in args and args[args.index("--cpu") + 1] == "2"
+    assert "-A" in args and args[args.index("-A") + 1] == str(tmp_path / "P00533.sto")
+
+
+def test_compute_msa_is_idempotent_on_existing_cache(tmp_path, monkeypatch):
+    """If the .sto file already exists, compute_msa returns immediately without
+    fetching the query sequence or invoking jackhmmer."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
+    # Pre-create a non-empty cache file
+    (tmp_path / "P00533.sto").write_text("# STOCKHOLM 1.0\nseq1 MGKLA\n//\n")
+    fetch_calls = []
+    run_calls = []
+    monkeypatch.setattr(
+        "target_affinity_ml.benchmarks.rns_scoring._fetch_uniprot_fasta",
+        lambda uid: (fetch_calls.append(uid), "")[1]
+    )
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (run_calls.append(a), None)[1]
+    )
+    out = compute_msa("P00533", db_path=Path("/fake"), out_dir=tmp_path)
+    assert out.exists()
+    assert fetch_calls == []  # network was NOT called
+    assert run_calls == []     # jackhmmer was NOT invoked
+
+
+def test_compute_msa_raises_on_jackhmmer_failure(tmp_path, monkeypatch):
+    """A nonzero jackhmmer returncode propagates as RuntimeError with stderr."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
+
+    def fake_run(args, **kw):
+        class R:
+            returncode = 1
+            stderr = "jackhmmer: database not found"
+        return R()
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "target_affinity_ml.benchmarks.rns_scoring._fetch_uniprot_fasta",
+        lambda uid: ">sp|TEST|TEST\nMGKLA\n"
+    )
+
+    with pytest.raises(RuntimeError, match="jackhmmer failed"):
+        compute_msa("P00533", db_path=Path("/fake"), out_dir=tmp_path)
+
+
+@pytest.mark.slow
+def test_compute_msa_real_jackhmmer(tmp_path):
+    """Integration: run real jackhmmer against UniRef50 (~10-30 min). Skips locally."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
+    db = Path("~/databases/uniref50.fasta").expanduser()
+    if not db.exists():
+        pytest.skip("UniRef50 not available in this env (this test runs on AWS)")
+    msa = compute_msa("P00533", db_path=db, out_dir=tmp_path, n_iter=1, n_cpu=4)
+    assert msa.exists()
+    assert msa.stat().st_size > 1000  # nontrivial alignment
