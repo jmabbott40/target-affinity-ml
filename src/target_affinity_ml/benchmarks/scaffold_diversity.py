@@ -110,8 +110,12 @@ def _bemis_murcko_scaffolds(smiles: pd.Series) -> list[str]:
     """Compute Bemis-Murcko scaffolds via the corrected Plan 2 Task 8 idiom.
 
     Uses ``MurckoScaffold.GetScaffoldForMol(mol)`` followed by
-    ``Chem.MolToSmiles(scaff)``. Invalid SMILES are tagged ``INVALID`` so they
-    still occupy a counter bin without crashing aggregation downstream.
+    ``Chem.MolToSmiles(scaff)``. For acyclic molecules,
+    ``MurckoScaffold.GetScaffoldForMol`` returns a non-None empty ``Mol`` whose
+    canonical SMILES is the empty string ``""`` — we tag these ``"NO_SCAFFOLD"``
+    so acyclics share a single bucket (aligns with ``data/splits.py:139``).
+    Invalid SMILES are tagged ``"INVALID"`` so they still occupy a counter bin
+    without crashing aggregation downstream.
     """
     from rdkit import Chem
     from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -123,7 +127,8 @@ def _bemis_murcko_scaffolds(smiles: pd.Series) -> list[str]:
             out.append("INVALID")
             continue
         scaff = MurckoScaffold.GetScaffoldForMol(mol)
-        out.append(Chem.MolToSmiles(scaff) if scaff is not None else "NO_SCAFFOLD")
+        smi = Chem.MolToSmiles(scaff) if scaff is not None else ""
+        out.append(smi if smi else "NO_SCAFFOLD")
     return out
 
 
@@ -160,10 +165,10 @@ def _mean_tanimoto(smiles: list[str], sample_size: int = 500) -> float:
             for j in range(i + 1, len(fps)):
                 pairs.append(DataStructs.TanimotoSimilarity(fps[i], fps[j]))
     else:
-        random.seed(42)
+        rng = random.Random(42)
         seen: set[tuple[int, int]] = set()
         while len(pairs) < sample_size:
-            i, j = sorted(random.sample(range(len(fps)), 2))
+            i, j = sorted(rng.sample(range(len(fps)), 2))
             if (i, j) in seen:
                 continue
             seen.add((i, j))
@@ -200,7 +205,6 @@ def _activity_cliff_frequency(
         keep_acts.append(a)
     if len(fps) < 2:
         return float("nan")
-    random.seed(42)
     n_total = len(fps) * (len(fps) - 1) // 2
     n_cliff = 0
     n_sampled = 0
@@ -215,9 +219,10 @@ def _activity_cliff_frequency(
                     n_cliff += 1
                 n_sampled += 1
     else:
+        rng = random.Random(42)
         seen: set[tuple[int, int]] = set()
         while n_sampled < sample_size:
-            i, j = sorted(random.sample(range(len(fps)), 2))
+            i, j = sorted(rng.sample(range(len(fps)), 2))
             if (i, j) in seen:
                 continue
             seen.add((i, j))

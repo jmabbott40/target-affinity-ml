@@ -62,9 +62,11 @@ def test_n_scaffolds_correct(synthetic_target_df):
     from target_affinity_ml.benchmarks.scaffold_diversity import compute_scaffold_metrics
 
     m = compute_scaffold_metrics(synthetic_target_df, "target_chembl_id", "canonical_smiles")
-    # Bemis-Murcko scaffolds: benzene (from c1ccccc1, c1ccccc1C, c1ccccc1CC) and
-    # empty-scaffold/CCO acyclics. At least 2 distinct scaffold strings should exist.
-    assert m.iloc[0]["n_scaffolds"] >= 2
+    # Bemis-Murcko scaffolds for the 5-compound fixture:
+    #   c1ccccc1, c1ccccc1C, c1ccccc1CC -> all bucket under "c1ccccc1" (benzene)
+    #   CCO x2                          -> acyclic, bucket under "NO_SCAFFOLD"
+    # So exactly 2 distinct scaffold strings.
+    assert m.iloc[0]["n_scaffolds"] == 2
 
 
 def test_largest_cluster_fraction_in_bounds(synthetic_target_df):
@@ -207,3 +209,23 @@ def test_compute_class_aggregates_handles_nan():
     agg = compute_class_aggregates(df, ["mean_tanimoto"])
     assert agg["mean_tanimoto"]["n"] == 2
     assert math.isclose(agg["mean_tanimoto"]["mean"], 0.5)
+
+
+def test_module_random_state_not_polluted():
+    """Verify compute_scaffold_metrics doesn't seed the module-global random."""
+    import random
+    from target_affinity_ml.benchmarks.scaffold_diversity import compute_scaffold_metrics
+
+    # Need >500 compounds to force the sampling branch in _mean_tanimoto
+    smis = ["c1ccccc1", "CCO", "c1ccccc1C"] * 200
+    df = pd.DataFrame({
+        "canonical_smiles": smis,
+        "target_chembl_id": ["CHEMBL1"] * len(smis),
+        "pactivity": [6.0] * len(smis),
+    })
+    random.seed(99)
+    pre = random.random()
+    _ = compute_scaffold_metrics(df, "target_chembl_id", "canonical_smiles")
+    random.seed(99)
+    post = random.random()
+    assert pre == post, "compute_scaffold_metrics polluted module-global random state"
