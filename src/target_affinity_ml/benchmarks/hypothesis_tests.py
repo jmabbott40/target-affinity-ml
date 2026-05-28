@@ -23,12 +23,10 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +116,14 @@ def h1_rf_vs_deep(
         for class_ in classes:
             for split in splits:
                 sub = per_seed.query(
-                    "(model == @rf or model == @deep) and `class` == @class_ and split == @split",
-                    local_dict={"rf": "random_forest", "deep": deep, "class_": class_, "split": split},
+                    "(model == @rf or model == @deep) and "
+                    "`class` == @class_ and split == @split",
+                    local_dict={
+                        "rf": "random_forest",
+                        "deep": deep,
+                        "class_": class_,
+                        "split": split,
+                    },
                 ).copy()
                 if sub.empty:
                     continue
@@ -289,7 +293,7 @@ def h2_split_degradation(per_seed: pd.DataFrame) -> pd.DataFrame:
 
 def h3_esm_target_advantage(
     per_seed: pd.DataFrame,
-    per_target_metrics: Optional[pd.DataFrame] = None,
+    per_target_metrics: pd.DataFrame | None = None,
     n_bootstrap: int = 10_000,
     seed: int = 42,
 ) -> dict:
@@ -358,7 +362,8 @@ def h3_esm_target_advantage(
     for class_ in classes:
         for split in splits:
             sub = per_seed.query(
-                "(model == 'esm_fp_mlp' or model == 'mlp') and `class` == @class_ and split == @split",
+                "(model == 'esm_fp_mlp' or model == 'mlp') and "
+                "`class` == @class_ and split == @split",
                 local_dict={"class_": class_, "split": split},
             )
             if sub.empty:

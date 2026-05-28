@@ -6,7 +6,7 @@ Public API (populated as Tasks 3-8 migrate modules):
     from target_affinity_ml.data.splits import random_split, scaffold_split, target_split
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 # Subpackages (populated by Plan 1 Tasks 3-8 migrations)
 from target_affinity_ml import (

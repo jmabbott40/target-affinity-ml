@@ -337,7 +337,7 @@ def _activity_cliff_frequency(
     acts = sub[activity_col].tolist()
     fps = []
     keep_acts: list[float] = []
-    for s, a in zip(smis, acts):
+    for s, a in zip(smis, acts, strict=False):
         mol = Chem.MolFromSmiles(s)
         if mol is None or pd.isna(a):
             continue

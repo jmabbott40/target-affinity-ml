@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared synthetic-data fixtures
 # ---------------------------------------------------------------------------
@@ -114,7 +113,8 @@ def test_h1_detects_engineered_rf_advantage(synthetic_per_seed):
 
     result = h1_rf_vs_deep(synthetic_per_seed)
     row = result.query(
-        "model_pair == 'random_forest_vs_esm_fp_mlp' and `class` == 'kinase' and split == 'scaffold'"
+        "model_pair == 'random_forest_vs_esm_fp_mlp' "
+        "and `class` == 'kinase' and split == 'scaffold'"
     )
     assert len(row) == 1
     r = row.iloc[0]
@@ -156,7 +156,8 @@ def test_h1_ci_brackets_engineered_mean_diff(synthetic_per_seed):
 
     result = h1_rf_vs_deep(synthetic_per_seed)
     row = result.query(
-        "model_pair == 'random_forest_vs_esm_fp_mlp' and `class` == 'kinase' and split == 'scaffold'"
+        "model_pair == 'random_forest_vs_esm_fp_mlp' "
+        "and `class` == 'kinase' and split == 'scaffold'"
     )
     assert len(row) == 1
     md = row.iloc[0]["mean_diff"]
@@ -504,11 +505,11 @@ def test_class_split_interaction_formula_string(synthetic_per_seed):
 def test_public_functions_import_from_package():
     """Confirms the __init__.py exports the public surface."""
     from target_affinity_ml.benchmarks import (
+        class_split_interaction,
         h1_rf_vs_deep,
         h2_split_degradation,
         h3_esm_target_advantage,
         h4_single_seed_flip_rate,
-        class_split_interaction,
     )
 
     for fn in (

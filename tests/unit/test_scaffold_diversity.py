@@ -214,6 +214,7 @@ def test_compute_class_aggregates_handles_nan():
 def test_module_random_state_not_polluted():
     """Verify compute_scaffold_metrics doesn't seed the module-global random."""
     import random
+
     from target_affinity_ml.benchmarks.scaffold_diversity import compute_scaffold_metrics
 
     # Need >500 compounds to force the sampling branch in _mean_tanimoto
@@ -236,7 +237,9 @@ def test_module_random_state_not_polluted():
 # ---------------------------------------------------------------------------
 
 
-def _make_synthetic_regression_df(n_per_class=40, slope_kinase=0.5, slope_gpcr=0.5, noise=0.05, seed=11):
+def _make_synthetic_regression_df(
+    n_per_class=40, slope_kinase=0.5, slope_gpcr=0.5, noise=0.05, seed=11
+):
     """Synthetic per-target data: Y = slope[class] * X + noise, classes pooled.
 
     Use this for tests of fit_degradation_regression. Setting slope_kinase==slope_gpcr
@@ -253,7 +256,7 @@ def _make_synthetic_regression_df(n_per_class=40, slope_kinase=0.5, slope_gpcr=0
     for cls, slope in [("kinase", slope_kinase), ("gpcr_aminergic", slope_gpcr)]:
         x = rng.uniform(0, 5, size=n_per_class)
         y = slope * x + rng.normal(0, noise, size=n_per_class)
-        for xi, yi in zip(x, y):
+        for xi, yi in zip(x, y, strict=False):
             rows.append({"X": xi, "Y": yi, "class_name": cls})
     return pd.DataFrame(rows)
 
@@ -265,7 +268,9 @@ def test_fit_degradation_regression_recovers_known_slope():
     result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
     # Slope per class ~0.5 (within tolerance)
     for cls in ("kinase", "gpcr_aminergic"):
-        assert abs(result["slopes"][cls]["slope"] - 0.5) < 0.1, f"slope for {cls}: {result['slopes'][cls]['slope']}"
+        assert abs(result["slopes"][cls]["slope"] - 0.5) < 0.1, (
+            f"slope for {cls}: {result['slopes'][cls]['slope']}"
+        )
     # Interaction term should NOT be significant
     assert result["interaction_p"] > 0.05
 
@@ -286,7 +291,18 @@ def test_fit_degradation_regression_returns_expected_keys():
     from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
     df = _make_synthetic_regression_df()
     result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
-    expected_top = {"formula", "n_obs", "r_squared", "r_squared_adj", "intercept", "intercept_p", "slopes", "interaction_p", "n_per_class", "alpha"}
+    expected_top = {
+        "formula",
+        "n_obs",
+        "r_squared",
+        "r_squared_adj",
+        "intercept",
+        "intercept_p",
+        "slopes",
+        "interaction_p",
+        "n_per_class",
+        "alpha",
+    }
     assert expected_top.issubset(result.keys())
     for cls in ("kinase", "gpcr_aminergic"):
         assert cls in result["slopes"]
@@ -333,7 +349,7 @@ def test_fit_degradation_regression_three_class_joint_f_test():
     for cls, slope in [("A_class", 0.3), ("B_class", 0.3), ("C_class", 0.8)]:
         x = rng.uniform(0, 5, size=50)
         y = slope * x + rng.normal(0, 0.1, size=50)
-        for xi, yi in zip(x, y):
+        for xi, yi in zip(x, y, strict=False):
             rows.append({"X": xi, "Y": yi, "class_name": cls})
     df = pd.DataFrame(rows)
 

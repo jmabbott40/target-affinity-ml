@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-28
+
+### Added — `benchmarks/` module
+
+- **`scaffold_diversity` submodule** (`src/target_affinity_ml/benchmarks/scaffold_diversity.py`).
+  Per-target Bemis-Murcko scaffold-diversity metrics (`n_scaffolds`, `scaffold_entropy`,
+  `largest_cluster_fraction`, `mean_tanimoto`, `activity_cliff_frequency`),
+  per-class aggregates (mean / median / IQR / n), and `fit_degradation_regression`
+  for OLS per-target degradation ~ metric * C(class) regressions with cross-class
+  interaction F-test. Uses local `random.Random(42)` (no module-state pollution)
+  and explicit `Treatment(reference=...)` (robust to future statsmodels default
+  changes). 24 unit tests.
+
+- **`rns_scoring` submodule** (`src/target_affinity_ml/benchmarks/rns_scoring.py`).
+  Structure + binding-site + MSA + (experimental) RNS pipeline. **Primary
+  per-target metric is `compute_binding_site_plddt`** (mean AlphaFold pLDDT
+  over binding-site residues) after the P3-T6 metric pivot — the two
+  validation-gate attempts (raw column entropy + JSD vs Swiss-Prot background)
+  did not reproduce ConSurf rankings, so the experimental `compute_per_residue_rns` /
+  `compute_conservation_entropy` / `aggregate_target_rns` functions are
+  preserved with `[EXPERIMENTAL]` docstring tags. Validation gate now does a
+  pLDDT sanity check on the bundled reference proteins (mean 88.1 > 50). 98+ unit tests.
+  Bundled `_rns_reference_data.json` ships via `[tool.setuptools.package-data]`.
+
+- **`hypothesis_tests` submodule** (`src/target_affinity_ml/benchmarks/hypothesis_tests.py`).
+  Plan 3 H1-H4 pre-registered tests + `class_split_interaction` cross-class
+  machinery. Pre-registered Bonferroni denominators (`N_TESTS_H1 = 12`,
+  `N_TESTS_H3 = 6`); vectorized 10K-resample bootstrap CIs via numpy fancy-
+  indexing; lazy statsmodels import; nullable boolean dtype for H2's interaction
+  row to preserve type semantics. Sign(0)-tolerance for H4 (avoids spurious
+  flip-rates near zero). Caveat documented in docstrings: 5-seed bootstrap CIs
+  have degraded nominal coverage. 34 unit tests.
+
+### Fixed
+
+- **Stale `__version__` constant**: `src/target_affinity_ml/__init__.py` previously
+  reported `1.0.0` even after the v1.1.0 release (pyproject.toml was correct but
+  the in-package constant was not). Both versions now agree on `1.2.0`.
+
+### Internal
+
+- Pre-existing Plan 3 ruff errors fixed for a clean release: long lines wrapped,
+  `zip()` calls given explicit `strict=False`, import block in
+  `tests/unit/test_rns_scoring.py` sorted.
+
 ## [1.1.0] - 2026-05-26
 
 ### Added

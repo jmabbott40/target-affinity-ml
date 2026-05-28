@@ -8,7 +8,8 @@ compute_msa                  : Build a multiple sequence alignment with jackhmme
 compute_per_residue_rns      : Compute per-residue RNS from an MSA [EXPERIMENTAL]
 aggregate_target_rns         : Aggregate per-residue RNS over a binding site [EXPERIMENTAL]
 compute_conservation_entropy : Conservation-entropy fallback for gapped sites [EXPERIMENTAL]
-compute_binding_site_plddt   : Mean per-residue pLDDT over binding-site residues (Plan 3 primary metric)
+compute_binding_site_plddt   : Mean per-residue pLDDT over binding-site residues
+                                (Plan 3 primary metric)
 validation_gate              : GO/NO-GO gate; uses pLDDT sanity check (P3-T6 pivot from RNS)
 """
 
@@ -825,9 +826,9 @@ def compute_per_residue_rns(
         ``{residue_index: rns_score}`` for each binding-site residue whose
         neighbourhood yields valid entropy / BLOSUM estimates.
     """
-    from Bio.PDB import NeighborSearch
-    from Bio.AlignIO import read as alignio_read
     from Bio.Align import substitution_matrices
+    from Bio.AlignIO import read as alignio_read
+    from Bio.PDB import NeighborSearch
 
     # 1. Load BLOSUM matrix
     blosum = substitution_matrices.load(blosum_name)
@@ -1126,6 +1127,7 @@ def validation_gate(
             ``name, uniprot, our_plddt, published_plddt, abs_dev, error``.
     """
     import math
+
     import pandas as pd
 
     if reference_set != "prabakaran_bromberg":
@@ -1165,7 +1167,11 @@ def validation_gate(
                 "uniprot": uniprot,
                 "our_plddt": our_plddt,
                 "published_plddt": published_plddt,
-                "abs_dev": abs(our_plddt - published_plddt) if not math.isnan(our_plddt) else float("nan"),
+                "abs_dev": (
+                    abs(our_plddt - published_plddt)
+                    if not math.isnan(our_plddt)
+                    else float("nan")
+                ),
                 "error": None,
             })
         except Exception as exc:  # noqa: BLE001

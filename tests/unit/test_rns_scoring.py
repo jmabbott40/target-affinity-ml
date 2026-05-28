@@ -71,7 +71,8 @@ def test_fetch_binding_site_kinase(tmp_path):
     residues = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
     assert isinstance(residues, list)
     assert all(isinstance(r, int) for r in residues)
-    assert 60 <= len(residues) <= 100  # KLIFS canonical pocket is 85; allow drift for non-standard kinases
+    # KLIFS canonical pocket is 85; allow drift for non-standard kinases
+    assert 60 <= len(residues) <= 100
 
 
 def test_fetch_binding_site_gpcr(tmp_path):
@@ -105,7 +106,9 @@ def test_fetch_binding_site_caches_correctly(tmp_path):
     assert cache_file.exists()
     # Mtime check (Plan 2 pattern)
     mtime_first = cache_file.stat().st_mtime
-    import time as _t; _t.sleep(0.01)
+    import time as _t
+
+    _t.sleep(0.01)
     _ = fetch_binding_site("CHEMBL203", class_name="kinase", cache_dir=tmp_path)
     assert cache_file.stat().st_mtime == mtime_first
 
@@ -118,8 +121,9 @@ def test_fetch_binding_site_caches_correctly(tmp_path):
 def test_compute_msa_invokes_jackhmmer_with_expected_args(tmp_path, monkeypatch):
     """compute_msa shells out to jackhmmer with the documented argument set
     and writes a Stockholm-format MSA at the cached path."""
-    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
     from pathlib import Path
+
+    from target_affinity_ml.benchmarks.rns_scoring import compute_msa
     captured_args = []
 
     def fake_run(args, **kw):
@@ -235,8 +239,8 @@ def _build_tiny_structure_with_known_geometry():
 
     The one-character amino-acid codes cycle through A, G, K, L, A.
     """
-    from Bio.PDB import Structure, Model, Chain, Residue, Atom
     import numpy as np
+    from Bio.PDB import Atom, Chain, Model, Residue, Structure
 
     structure = Structure.Structure("test")
     model = Model.Model(0)
@@ -252,7 +256,7 @@ def _build_tiny_structure_with_known_geometry():
         (15.2, 0.0, 0.0),
     ]
 
-    for i, (resname, coord) in enumerate(zip(aa_codes, coords), start=1):
+    for i, (resname, coord) in enumerate(zip(aa_codes, coords, strict=False), start=1):
         res = Residue.Residue((" ", i, " "), resname, " ")
         ca = Atom.Atom(
             name="CA",
@@ -378,7 +382,8 @@ def test_compute_per_residue_rns_returns_normalized_scores(tmp_path):
 
 
 def test_compute_per_residue_rns_higher_score_for_more_conserved(tmp_path):
-    """A residue with a more-conserved neighborhood gets a higher RNS than one with a more-variable neighborhood.
+    """A residue with a more-conserved neighborhood gets a higher RNS than one
+    with a more-variable neighborhood.
 
     Uses sequence_window=1 so that residue 2's sequence neighbourhood (cols 1-3)
     and residue 3's sequence neighbourhood (cols 2-4) don't fully overlap on
@@ -406,7 +411,8 @@ def test_compute_per_residue_rns_higher_score_for_more_conserved(tmp_path):
 
 
 def test_compute_per_residue_rns_skips_missing_residue(tmp_path):
-    """A binding-site residue not present in the structure is excluded from output (not an exception)."""
+    """A binding-site residue not present in the structure is excluded from
+    output (not an exception)."""
     from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns
 
     structure = _build_tiny_structure_with_known_geometry()  # has residues 1-5
@@ -451,8 +457,8 @@ def _build_tiny_structure_with_plddt(plddt_map: dict[int, float]):
     Each residue is placed at an arbitrary coordinate; only the B-factor
     (used by _get_residue_plddt to read pLDDT) matters for the tests.
     """
-    from Bio.PDB import Structure, Model, Chain, Residue, Atom
     import numpy as np
+    from Bio.PDB import Atom, Chain, Model, Residue, Structure
 
     structure = Structure.Structure("plddt_test")
     model = Model.Model(0)
@@ -510,6 +516,7 @@ def test_aggregate_target_rns_alphafold_plddt_weighted(tmp_path):
 def test_aggregate_target_rns_empty_returns_nan(tmp_path):
     """Empty per-residue dict returns nan."""
     import math
+
     from target_affinity_ml.benchmarks.rns_scoring import aggregate_target_rns
     result = aggregate_target_rns({}, {"source": "PDB"}, structure=None)
     assert math.isnan(result)
@@ -534,6 +541,7 @@ def test_compute_binding_site_plddt_alphafold_returns_mean(tmp_path):
 def test_compute_binding_site_plddt_pdb_returns_nan(tmp_path):
     """PDB source returns nan regardless of B-factor values."""
     import math
+
     from target_affinity_ml.benchmarks.rns_scoring import compute_binding_site_plddt
 
     structure = _build_tiny_structure_with_plddt({1: 85.0, 2: 75.0})
