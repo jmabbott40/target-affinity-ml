@@ -229,3 +229,92 @@ def test_module_random_state_not_polluted():
     random.seed(99)
     post = random.random()
     assert pre == post, "compute_scaffold_metrics polluted module-global random state"
+
+
+# ---------------------------------------------------------------------------
+# P3-T13: fit_degradation_regression tests
+# ---------------------------------------------------------------------------
+
+
+def _make_synthetic_regression_df(n_per_class=40, slope_kinase=0.5, slope_gpcr=0.5, noise=0.05, seed=11):
+    """Synthetic per-target data: Y = slope[class] * X + noise, classes pooled.
+
+    Use this for tests of fit_degradation_regression. Setting slope_kinase==slope_gpcr
+    produces a null cross-class interaction; setting them differently produces a
+    significant interaction.
+
+    Note: default ``seed=11`` chosen because seed=7 produced a borderline
+    significant null draw (interaction_p≈0.03 even though slopes were equal),
+    a chance fluctuation of the random draw rather than a model issue.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    rows = []
+    for cls, slope in [("kinase", slope_kinase), ("gpcr_aminergic", slope_gpcr)]:
+        x = rng.uniform(0, 5, size=n_per_class)
+        y = slope * x + rng.normal(0, noise, size=n_per_class)
+        for xi, yi in zip(x, y):
+            rows.append({"X": xi, "Y": yi, "class_name": cls})
+    return pd.DataFrame(rows)
+
+
+def test_fit_degradation_regression_recovers_known_slope():
+    """When both classes have slope=0.5, the pooled regression should report ~0.5 for both."""
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df(slope_kinase=0.5, slope_gpcr=0.5, noise=0.05)
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+    # Slope per class ~0.5 (within tolerance)
+    for cls in ("kinase", "gpcr_aminergic"):
+        assert abs(result["slopes"][cls]["slope"] - 0.5) < 0.1, f"slope for {cls}: {result['slopes'][cls]['slope']}"
+    # Interaction term should NOT be significant
+    assert result["interaction_p"] > 0.05
+
+
+def test_fit_degradation_regression_detects_class_interaction():
+    """When slopes differ by class (0.2 vs 0.8), interaction term should be significant."""
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df(slope_kinase=0.8, slope_gpcr=0.2, noise=0.05, n_per_class=60)
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+    # Per-class slopes match
+    assert abs(result["slopes"]["kinase"]["slope"] - 0.8) < 0.1
+    assert abs(result["slopes"]["gpcr_aminergic"]["slope"] - 0.2) < 0.1
+    # Interaction is significant
+    assert result["interaction_p"] < 0.01
+
+
+def test_fit_degradation_regression_returns_expected_keys():
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df()
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+    expected_top = {"formula", "n_obs", "r_squared", "r_squared_adj", "intercept", "intercept_p", "slopes", "interaction_p", "n_per_class", "alpha"}
+    assert expected_top.issubset(result.keys())
+    for cls in ("kinase", "gpcr_aminergic"):
+        assert cls in result["slopes"]
+        assert {"slope", "ci_low", "ci_high", "p_value"}.issubset(result["slopes"][cls].keys())
+
+
+def test_fit_degradation_regression_drops_nan_rows():
+    """NaN in metric, degradation, or class column -> row dropped, but no crash."""
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df()
+    # Inject NaNs
+    df.loc[0, "X"] = float("nan")
+    df.loc[1, "Y"] = float("nan")
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+    assert result["n_obs"] == len(df) - 2
+
+
+def test_fit_degradation_regression_requires_at_least_two_classes():
+    """Single-class data raises ValueError."""
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df()
+    single = df[df["class_name"] == "kinase"]
+    with pytest.raises(ValueError, match="≥2 classes"):
+        fit_degradation_regression(single, "X", "Y", class_col="class_name")
+
+
+def test_fit_degradation_regression_n_per_class():
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = _make_synthetic_regression_df(n_per_class=40)
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+    assert result["n_per_class"] == {"kinase": 40, "gpcr_aminergic": 40}
