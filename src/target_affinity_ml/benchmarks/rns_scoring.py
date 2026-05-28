@@ -20,10 +20,32 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import requests
 from Bio.PDB import PDBParser
+from scipy.spatial.distance import jensenshannon
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# AA background frequencies
+# ---------------------------------------------------------------------------
+
+# Swiss-Prot AA background frequencies (standard reference values).
+# Source: UniProt KB Swiss-Prot release statistics (well-published; see
+# https://web.expasy.org/protscale/pscale/A.A.Swiss-Prot.html). These are
+# the universe-wide AA frequencies; columns whose AA distribution is similar
+# to this background are NOT conserved (just typical), while columns that
+# concentrate on a specific (or atypical) AA produce high JS divergence vs
+# this background.
+SWISSPROT_BACKGROUND_FREQ = {
+    "A": 0.0825, "R": 0.0553, "N": 0.0406, "D": 0.0546, "C": 0.0137,
+    "E": 0.0674, "Q": 0.0393, "G": 0.0707, "H": 0.0227, "I": 0.0595,
+    "L": 0.0966, "K": 0.0582, "M": 0.0241, "F": 0.0386, "P": 0.0474,
+    "S": 0.0656, "T": 0.0534, "W": 0.0108, "Y": 0.0292, "V": 0.0687,
+}
+# Sums to 1.0; covers the 20 standard AAs; gap/unknown excluded.
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +77,47 @@ _GPCR_AMINERGIC_ORTHOSTERIC_BW: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _column_jsd_vs_background(column: list[str]) -> float:
+    """Jensen-Shannon divergence of column AA distribution vs Swiss-Prot background.
+
+    Returns a value in [0, 1] (base-2 JSD). Higher means MORE conserved
+    (the column distribution deviates more from background — likely because
+    a specific AA dominates).
+
+    Returns nan if the column has < 5 non-gap residues (too few for reliable JSD).
+
+    Parameters
+    ----------
+    column:
+        List of single-character amino acid codes for the MSA column.
+        Gaps ('-', '.') and ambiguous codes ('B', 'J', 'O', 'U', 'X', 'Z')
+        are excluded from the count; only the 20 standard AAs are used.
+
+    Returns
+    -------
+    float
+        Jensen-Shannon divergence in [0, 1] (base-2 log), or nan if fewer than
+        5 non-gap, non-ambiguous residues are present in the column.
+    """
+    standard_aas = "ACDEFGHIKLMNPQRSTVWY"
+    counts = {aa: 0 for aa in standard_aas}
+    for c in column:
+        c_up = c.upper()
+        if c_up in counts:
+            counts[c_up] += 1
+        # gaps ('-', '.') and ambiguous codes silently excluded
+    total = sum(counts.values())
+    if total < 5:
+        return float("nan")
+    p = np.array([counts[aa] / total for aa in standard_aas])
+    q = np.array([SWISSPROT_BACKGROUND_FREQ[aa] for aa in standard_aas])
+    # scipy.spatial.distance.jensenshannon returns the JS *distance* (sqrt of
+    # divergence); squaring gives the divergence proper. With base=2 log, both
+    # are in [0, 1].
+    dist = jensenshannon(p, q, base=2)
+    return float(dist) ** 2  # convert distance back to divergence
 
 
 def _download_with_backoff(url: str, path: Path, max_retries: int) -> None:
@@ -704,29 +767,31 @@ def compute_per_residue_rns(
       1. Find spatial neighbors (Cα distance <= neighbor_radius_angstrom) via
          Bio.PDB.NeighborSearch.
       2. Add sequence neighbors (residue ± sequence_window positions).
-      3. Compute Shannon entropy of the local sequence environment across the MSA
-         for each neighbor column.
+      3. Compute the Jensen-Shannon divergence of the local sequence environment
+         vs the Swiss-Prot AA background (``_column_jsd_vs_background``) for
+         each neighbor column.  Higher JSD = column distributes differently from
+         background = conserved.
       4. Weight by BLOSUM62 evolutionary conservation (diagonal self-score of the
          most-frequent amino acid in the column, normalized to [0, 1] by dividing
          by the maximum BLOSUM62 diagonal score, 11 for Trp).
-      5. Combine: RNS = (1 − mean_normalized_entropy) * mean_blosum_weight,
-         clipped to [0, 1].  Higher means more functionally significant (more
-         conserved, stronger BLOSUM support).
+      5. Combine: RNS = clip(mean_column_jsd × mean_blosum_weight, 0, 1).
+         Higher means more functionally significant (more conserved, stronger
+         BLOSUM support).
 
     Algorithm notes vs. the original template
     ------------------------------------------
-    * Gap characters ('-' and '.') are excluded from the column frequency count
-      when computing BLOSUM weights (we only ask "which real AA dominates this
-      column?"), but they *are* included as their own symbol when computing the
-      Shannon entropy so that gapped, poorly-covered regions are penalised with
-      higher entropy (lower RNS).  This is a deliberate deviation: excluding
-      gaps from entropy would artificially inflate conservation scores for
-      columns where many homologs simply lack sequence coverage.
+    * JSD replaces raw Shannon entropy because raw entropy is biased by MSA
+      depth — deep kinase MSAs (e.g. ABL1 with 53 MB alignment) produce high
+      per-column entropy regardless of conservation, anti-correlating with
+      ConSurf reference values.  JSD measures distributional divergence from
+      the Swiss-Prot background, so MSA depth does NOT bias it.
+    * With JSD, higher is more conserved — no ``1 - x`` flip needed (unlike the
+      old entropy formulation where we used ``1 - normalized_entropy``).
+    * Columns with < 5 non-gap residues return nan from ``_column_jsd_vs_background``
+      and are excluded from the mean, preventing sparse columns from dragging
+      down the score.
     * The BLOSUM62 normalization ceiling is 11.0 (Trp self-score), matching the
-      template.  Scores below 0 are floored at 0.0 before averaging so that
-      negative diagonal entries (e.g. Cys–Cys = 9 is fine, but the very few
-      historically mis-assembled BLOSUM variants that have negative diagonals)
-      do not drag the weight below zero.
+      template.  Scores below 0 are floored at 0.0 before averaging.
     * Residues whose neighborhood produces zero valid MSA columns (all neighbors
       missing from the MSA mapping) are silently excluded from the returned dict.
 
@@ -756,8 +821,6 @@ def compute_per_residue_rns(
     from Bio.PDB import NeighborSearch
     from Bio.AlignIO import read as alignio_read
     from Bio.Align import substitution_matrices
-    import numpy as np
-    from scipy.stats import entropy as shannon_entropy
 
     # 1. Load BLOSUM matrix
     blosum = substitution_matrices.load(blosum_name)
@@ -797,9 +860,6 @@ def compute_per_residue_rns(
 
     # 4. Compute RNS for each binding-site residue
     rns_scores: dict[int, float] = {}
-    # Pre-compute max entropy for normalisation: log2(21) symbols (20 AAs + gap)
-    max_entropy = float(np.log2(21))
-    amino_acids_and_gap = "ACDEFGHIKLMNPQRSTVWY-"
 
     for residue_idx in binding_site:
         target_res = res_by_num.get(residue_idx)
@@ -826,8 +886,8 @@ def compute_per_residue_rns(
         # Union of spatial and sequence neighbourhoods (including the residue itself)
         neighborhood = spatial_idxs | seq_idxs
 
-        # 5. For each neighbour, compute MSA-column entropy + BLOSUM weight
-        col_entropies: list[float] = []
+        # 5. For each neighbour, compute MSA-column JSD + BLOSUM weight
+        col_jsds: list[float] = []
         col_blosum_weights: list[float] = []
 
         for nbr_idx in neighborhood:
@@ -835,31 +895,21 @@ def compute_per_residue_rns(
             if col_idx is None:
                 continue  # neighbour not in MSA mapping
 
-            # Extract the column (upper-case, preserving gaps)
+            # Extract the column (upper-case)
             column = [str(rec.seq)[col_idx].upper() for rec in msa]
 
-            # Shannon entropy: count all symbols including gaps ('-') to
-            # penalise poorly-covered columns.  Dots ('.') are folded into '-'.
-            column_norm = [c if c != "." else "-" for c in column]
-            freqs: dict[str, int] = {}
-            for aa in column_norm:
-                freqs[aa] = freqs.get(aa, 0) + 1
-
-            total = sum(freqs.values())
-            if total == 0:
-                continue
-
-            # Build probability vector over the 21-symbol alphabet
-            counts = np.array(
-                [freqs.get(c, 0) for c in amino_acids_and_gap], dtype=float
-            )
-            nonzero = counts[counts > 0]
-            probs = nonzero / nonzero.sum()
-            ent = float(shannon_entropy(probs, base=2))
-            col_entropies.append(ent)
+            # Jensen-Shannon divergence vs Swiss-Prot background.
+            # Gaps and ambiguous codes are excluded inside _column_jsd_vs_background.
+            jsd = _column_jsd_vs_background(column)
+            if not (jsd == jsd):  # nan check (math.isnan not imported here)
+                continue  # column too sparse (< 5 non-gap residues)
+            col_jsds.append(jsd)
 
             # BLOSUM weight from most-frequent real amino acid in the column.
-            # Exclude gap when picking the dominant AA for BLOSUM lookup.
+            freqs: dict[str, int] = {}
+            for aa in column:
+                aa_up = aa.upper() if aa not in ("-", ".") else aa
+                freqs[aa_up] = freqs.get(aa_up, 0) + 1
             real_freqs = {k: v for k, v in freqs.items() if k in "ACDEFGHIKLMNPQRSTVWY"}
             if real_freqs:
                 most_freq_aa = max(real_freqs, key=lambda k: real_freqs[k])
@@ -870,17 +920,16 @@ def compute_per_residue_rns(
                 except (KeyError, ValueError):
                     col_blosum_weights.append(0.5)  # unknown AA: neutral weight
             # If the column is all gaps, contribute no BLOSUM weight entry
-            # (and the entropy already captures the poor coverage)
 
-        if not col_entropies:
+        if not col_jsds:
             continue  # no valid columns in neighbourhood → exclude residue
 
-        # 6. Aggregate: lower entropy → higher conservation → higher RNS
-        normalized_entropy = float(np.mean(col_entropies)) / max_entropy
+        # 6. Aggregate: higher JSD → more conserved → higher RNS (no 1-x flip needed)
+        mean_column_jsd = float(np.mean(col_jsds))
         mean_blosum_weight = (
             float(np.mean(col_blosum_weights)) if col_blosum_weights else 0.5
         )
-        rns = max(0.0, min(1.0, (1.0 - normalized_entropy) * mean_blosum_weight))
+        rns = max(0.0, min(1.0, mean_column_jsd * mean_blosum_weight))
         rns_scores[residue_idx] = rns
 
     return rns_scores
@@ -1055,23 +1104,30 @@ def compute_conservation_entropy(
     binding_site: list[int],
     msa_path: Path,
 ) -> float:
-    """Simpler fallback metric: mean Shannon entropy of binding-site MSA columns.
+    """Simpler fallback metric: mean JSD of binding-site MSA columns vs Swiss-Prot background.
 
     Loads the Stockholm MSA, identifies the columns corresponding to binding-site
     residues (via the query-sequence gap mapping from the first MSA record), then
-    computes Shannon entropy per column over the 20 amino acid types plus gap ('-').
-    Returns the mean across binding-site columns.
+    computes the Jensen-Shannon divergence of each column's AA distribution vs the
+    Swiss-Prot background AA frequencies (``SWISSPROT_BACKGROUND_FREQ``).
+    Returns the mean JSD across binding-site columns.
 
     Used in parallel with :func:`compute_per_residue_rns` for the sensitivity
     analysis AND as the pivot metric if the Task 6 validation gate fails.
 
-    A lower value means more conserved (more informative).  Typical range is
-    ``[0, log2(21)] ≈ [0, 4.39]``.  Callers may normalise to ``[0, 1]`` by
-    dividing by ``math.log2(21)``.
+    **Semantics**: a HIGHER value means MORE conserved (more informative).  This is
+    the opposite of the previous raw-entropy convention where lower meant conserved.
+    JSD is bounded in ``[0, 1]`` (base-2 log); columns that look like the typical
+    Swiss-Prot AA composition score near 0, while columns dominated by a single
+    specific AA (highly conserved) score near 1.
 
-    Algorithm note: gap characters ('.' in Stockholm format) are folded into '-'
-    before counting so that insertion-column conventions do not create spurious
-    extra symbols.
+    Why JSD instead of raw Shannon entropy: raw entropy is biased by MSA depth —
+    deep MSAs produce high per-column entropy regardless of conservation, because
+    more sequences sample more diversity.  JSD measures how much the column
+    distribution *deviates from the global background*, so MSA depth does NOT bias
+    it.
+
+    Columns with < 5 non-gap residues are excluded (too few for reliable JSD).
 
     Parameters
     ----------
@@ -1083,12 +1139,11 @@ def compute_conservation_entropy(
     Returns
     -------
     float
-        Mean column entropy (bits) over binding-site columns, or ``float('nan')``
-        if no binding-site column could be mapped.
+        Mean column JSD (base-2) over binding-site columns, in ``[0, 1]``.
+        Returns ``float('nan')`` if no binding-site column could be mapped or
+        all columns are too sparse (< 5 non-gap residues).
     """
     from Bio.AlignIO import read as alignio_read
-    import numpy as np
-    from scipy.stats import entropy as shannon_entropy
 
     msa_path = Path(msa_path)
     msa = alignio_read(str(msa_path), "stockholm")
@@ -1104,27 +1159,17 @@ def compute_conservation_entropy(
             seq_pos += 1
             seq_pos_to_col[seq_pos] = col_idx
 
-    col_entropies: list[float] = []
+    col_jsds: list[float] = []
     for residue_idx in binding_site:
         col_idx = seq_pos_to_col.get(residue_idx)
         if col_idx is None:
             continue
 
         column = [str(rec.seq)[col_idx].upper() for rec in msa]
-        # Fold '.' (insertion convention) into '-'
-        column = [c if c != "." else "-" for c in column]
+        jsd = _column_jsd_vs_background(column)
+        if jsd == jsd:  # skip nan (too few non-gap residues)
+            col_jsds.append(jsd)
 
-        freqs: dict[str, int] = {}
-        for aa in column:
-            freqs[aa] = freqs.get(aa, 0) + 1
-
-        counts = np.array(list(freqs.values()), dtype=float)
-        nonzero = counts[counts > 0]
-        if nonzero.sum() == 0:
-            continue
-        probs = nonzero / nonzero.sum()
-        col_entropies.append(float(shannon_entropy(probs, base=2)))
-
-    if not col_entropies:
+    if not col_jsds:
         return float("nan")
-    return float(np.mean(col_entropies))
+    return float(np.mean(col_jsds))

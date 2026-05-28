@@ -418,18 +418,24 @@ def test_compute_per_residue_rns_skips_missing_residue(tmp_path):
     # key assertion: no exception was raised (we reach this line successfully)
 
 
-def test_compute_conservation_entropy_lower_for_more_conserved(tmp_path):
-    """Conservation entropy is lower for highly-conserved binding-site columns."""
+def test_compute_conservation_metric_higher_for_more_conserved(tmp_path):
+    """Conservation JSD metric is higher for highly-conserved binding-site columns.
+
+    With JSD vs Swiss-Prot background, conserved columns (all one AA) deviate
+    strongly from the typical-protein background → high JSD.  Variable columns
+    look more like background → low JSD.  The semantics are the opposite of the
+    old raw-entropy convention where lower meant conserved.
+    """
     from target_affinity_ml.benchmarks.rns_scoring import compute_conservation_entropy
 
     msa_path = tmp_path / "test.sto"
-    # conserved_positions=[2, 3] → all seqs agree on those columns → near-zero entropy
+    # conserved_positions=[2, 3] → all seqs agree on those columns → high JSD vs background
     msa_path.write_text(_build_synthetic_msa(n_seqs=10, length=10, conserved_positions=[2, 3]))
-    h_conserved = compute_conservation_entropy([2, 3], msa_path)
-    # positions 5 and 7 are variable → higher entropy
-    h_variable = compute_conservation_entropy([5, 7], msa_path)
-    assert h_conserved < h_variable, (
-        f"Expected conserved entropy ({h_conserved:.4f}) < variable entropy ({h_variable:.4f})"
+    metric_conserved = compute_conservation_entropy([2, 3], msa_path)
+    # positions 5 and 7 are variable → distribution closer to background → lower JSD
+    metric_variable = compute_conservation_entropy([5, 7], msa_path)
+    assert metric_conserved > metric_variable, (
+        f"Expected conserved JSD ({metric_conserved:.4f}) > variable JSD ({metric_variable:.4f})"
     )
 
 
