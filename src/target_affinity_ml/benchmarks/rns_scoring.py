@@ -688,3 +688,278 @@ def compute_msa(
         )
 
     return msa_path
+
+
+def compute_per_residue_rns(
+    structure: Any,
+    binding_site: list[int],
+    msa_path: Path,
+    neighbor_radius_angstrom: float = 8.0,
+    sequence_window: int = 5,
+    blosum_name: str = "BLOSUM62",
+) -> dict[int, float]:
+    """Per-residue RNS scores for binding-site residues.
+
+    For each binding-site residue:
+      1. Find spatial neighbors (Cα distance <= neighbor_radius_angstrom) via
+         Bio.PDB.NeighborSearch.
+      2. Add sequence neighbors (residue ± sequence_window positions).
+      3. Compute Shannon entropy of the local sequence environment across the MSA
+         for each neighbor column.
+      4. Weight by BLOSUM62 evolutionary conservation (diagonal self-score of the
+         most-frequent amino acid in the column, normalized to [0, 1] by dividing
+         by the maximum BLOSUM62 diagonal score, 11 for Trp).
+      5. Combine: RNS = (1 − mean_normalized_entropy) * mean_blosum_weight,
+         clipped to [0, 1].  Higher means more functionally significant (more
+         conserved, stronger BLOSUM support).
+
+    Algorithm notes vs. the original template
+    ------------------------------------------
+    * Gap characters ('-' and '.') are excluded from the column frequency count
+      when computing BLOSUM weights (we only ask "which real AA dominates this
+      column?"), but they *are* included as their own symbol when computing the
+      Shannon entropy so that gapped, poorly-covered regions are penalised with
+      higher entropy (lower RNS).  This is a deliberate deviation: excluding
+      gaps from entropy would artificially inflate conservation scores for
+      columns where many homologs simply lack sequence coverage.
+    * The BLOSUM62 normalization ceiling is 11.0 (Trp self-score), matching the
+      template.  Scores below 0 are floored at 0.0 before averaging so that
+      negative diagonal entries (e.g. Cys–Cys = 9 is fine, but the very few
+      historically mis-assembled BLOSUM variants that have negative diagonals)
+      do not drag the weight below zero.
+    * Residues whose neighborhood produces zero valid MSA columns (all neighbors
+      missing from the MSA mapping) are silently excluded from the returned dict.
+
+    Parameters
+    ----------
+    structure:
+        Bio.PDB.Structure object from :func:`fetch_structure`.
+    binding_site:
+        1-indexed residue numbers from :func:`fetch_binding_site`.
+    msa_path:
+        Stockholm-format MSA from :func:`compute_msa`.  The first sequence in
+        the file is treated as the query (jackhmmer convention).
+    neighbor_radius_angstrom:
+        Cα–Cα distance threshold for spatial neighbourhood (Å).
+    sequence_window:
+        Half-width of the sequence neighbourhood window (residues either side).
+    blosum_name:
+        Name of the substitution matrix to load via
+        ``Bio.Align.substitution_matrices.load``.
+
+    Returns
+    -------
+    dict[int, float]
+        ``{residue_index: rns_score}`` for each binding-site residue whose
+        neighbourhood yields valid entropy / BLOSUM estimates.
+    """
+    from Bio.PDB import NeighborSearch
+    from Bio.AlignIO import read as alignio_read
+    from Bio.Align import substitution_matrices
+    import numpy as np
+    from scipy.stats import entropy as shannon_entropy
+
+    # 1. Load BLOSUM matrix
+    blosum = substitution_matrices.load(blosum_name)
+
+    # 2. Load MSA and map query sequence positions to MSA column indices
+    msa_path = Path(msa_path)
+    msa = alignio_read(str(msa_path), "stockholm")
+    if len(msa) == 0:
+        return {}
+
+    query_seq = str(msa[0].seq)
+    # Build a 1-based position → 0-based column-index mapping for the query.
+    # Columns where the query has '-' or '.' are insertions in other sequences
+    # relative to the query; they don't correspond to any query residue.
+    seq_pos_to_col: dict[int, int] = {}
+    seq_pos = 0
+    for col_idx, aa in enumerate(query_seq):
+        if aa not in ("-", "."):
+            seq_pos += 1
+            seq_pos_to_col[seq_pos] = col_idx
+
+    # 3. Collect all Cα atoms from ATOM records (exclude HETATM via id[0] == " ")
+    ca_atoms = [
+        atom
+        for atom in structure.get_atoms()
+        if atom.get_name() == "CA" and atom.get_parent().id[0] == " "
+    ]
+    ns = NeighborSearch(ca_atoms)
+
+    # Map residue number → Bio.PDB.Residue (first model, all chains)
+    res_by_num: dict[int, Any] = {}
+    for model in structure:
+        for chain in model:
+            for res in chain:
+                if res.id[0] == " ":  # standard (ATOM) residue
+                    res_by_num[res.id[1]] = res
+
+    # 4. Compute RNS for each binding-site residue
+    rns_scores: dict[int, float] = {}
+    # Pre-compute max entropy for normalisation: log2(21) symbols (20 AAs + gap)
+    max_entropy = float(np.log2(21))
+    amino_acids_and_gap = "ACDEFGHIKLMNPQRSTVWY-"
+
+    for residue_idx in binding_site:
+        target_res = res_by_num.get(residue_idx)
+        if target_res is None:
+            continue  # residue absent from structure → skip silently
+
+        try:
+            target_ca = target_res["CA"]
+        except KeyError:
+            continue  # Cα absent (e.g. Gly with missing backbone) → skip
+
+        # Spatial neighbours
+        spatial_neighbors = ns.search(
+            target_ca.coord, neighbor_radius_angstrom, level="R"
+        )
+        spatial_idxs = {r.id[1] for r in spatial_neighbors if r.id[0] == " "}
+
+        # Sequence neighbours (±window positions)
+        seq_idxs = {
+            residue_idx + d
+            for d in range(-sequence_window, sequence_window + 1)
+        }
+
+        # Union of spatial and sequence neighbourhoods (including the residue itself)
+        neighborhood = spatial_idxs | seq_idxs
+
+        # 5. For each neighbour, compute MSA-column entropy + BLOSUM weight
+        col_entropies: list[float] = []
+        col_blosum_weights: list[float] = []
+
+        for nbr_idx in neighborhood:
+            col_idx = seq_pos_to_col.get(nbr_idx)
+            if col_idx is None:
+                continue  # neighbour not in MSA mapping
+
+            # Extract the column (upper-case, preserving gaps)
+            column = [str(rec.seq)[col_idx].upper() for rec in msa]
+
+            # Shannon entropy: count all symbols including gaps ('-') to
+            # penalise poorly-covered columns.  Dots ('.') are folded into '-'.
+            column_norm = [c if c != "." else "-" for c in column]
+            freqs: dict[str, int] = {}
+            for aa in column_norm:
+                freqs[aa] = freqs.get(aa, 0) + 1
+
+            total = sum(freqs.values())
+            if total == 0:
+                continue
+
+            # Build probability vector over the 21-symbol alphabet
+            counts = np.array(
+                [freqs.get(c, 0) for c in amino_acids_and_gap], dtype=float
+            )
+            nonzero = counts[counts > 0]
+            probs = nonzero / nonzero.sum()
+            ent = float(shannon_entropy(probs, base=2))
+            col_entropies.append(ent)
+
+            # BLOSUM weight from most-frequent real amino acid in the column.
+            # Exclude gap when picking the dominant AA for BLOSUM lookup.
+            real_freqs = {k: v for k, v in freqs.items() if k in "ACDEFGHIKLMNPQRSTVWY"}
+            if real_freqs:
+                most_freq_aa = max(real_freqs, key=lambda k: real_freqs[k])
+                try:
+                    blosum_self = float(blosum[(most_freq_aa, most_freq_aa)])
+                    # Normalise to [0, 1]; BLOSUM62 diagonal ≈ 4–11
+                    col_blosum_weights.append(max(0.0, blosum_self / 11.0))
+                except (KeyError, ValueError):
+                    col_blosum_weights.append(0.5)  # unknown AA: neutral weight
+            # If the column is all gaps, contribute no BLOSUM weight entry
+            # (and the entropy already captures the poor coverage)
+
+        if not col_entropies:
+            continue  # no valid columns in neighbourhood → exclude residue
+
+        # 6. Aggregate: lower entropy → higher conservation → higher RNS
+        normalized_entropy = float(np.mean(col_entropies)) / max_entropy
+        mean_blosum_weight = (
+            float(np.mean(col_blosum_weights)) if col_blosum_weights else 0.5
+        )
+        rns = max(0.0, min(1.0, (1.0 - normalized_entropy) * mean_blosum_weight))
+        rns_scores[residue_idx] = rns
+
+    return rns_scores
+
+
+def compute_conservation_entropy(
+    binding_site: list[int],
+    msa_path: Path,
+) -> float:
+    """Simpler fallback metric: mean Shannon entropy of binding-site MSA columns.
+
+    Loads the Stockholm MSA, identifies the columns corresponding to binding-site
+    residues (via the query-sequence gap mapping from the first MSA record), then
+    computes Shannon entropy per column over the 20 amino acid types plus gap ('-').
+    Returns the mean across binding-site columns.
+
+    Used in parallel with :func:`compute_per_residue_rns` for the sensitivity
+    analysis AND as the pivot metric if the Task 6 validation gate fails.
+
+    A lower value means more conserved (more informative).  Typical range is
+    ``[0, log2(21)] ≈ [0, 4.39]``.  Callers may normalise to ``[0, 1]`` by
+    dividing by ``math.log2(21)``.
+
+    Algorithm note: gap characters ('.' in Stockholm format) are folded into '-'
+    before counting so that insertion-column conventions do not create spurious
+    extra symbols.
+
+    Parameters
+    ----------
+    binding_site:
+        1-indexed residue numbers.
+    msa_path:
+        Stockholm-format MSA file.
+
+    Returns
+    -------
+    float
+        Mean column entropy (bits) over binding-site columns, or ``float('nan')``
+        if no binding-site column could be mapped.
+    """
+    from Bio.AlignIO import read as alignio_read
+    import numpy as np
+    from scipy.stats import entropy as shannon_entropy
+
+    msa_path = Path(msa_path)
+    msa = alignio_read(str(msa_path), "stockholm")
+    if len(msa) == 0:
+        return float("nan")
+
+    # Map 1-based query sequence positions to 0-based MSA column indices
+    query_seq = str(msa[0].seq)
+    seq_pos_to_col: dict[int, int] = {}
+    seq_pos = 0
+    for col_idx, aa in enumerate(query_seq):
+        if aa not in ("-", "."):
+            seq_pos += 1
+            seq_pos_to_col[seq_pos] = col_idx
+
+    col_entropies: list[float] = []
+    for residue_idx in binding_site:
+        col_idx = seq_pos_to_col.get(residue_idx)
+        if col_idx is None:
+            continue
+
+        column = [str(rec.seq)[col_idx].upper() for rec in msa]
+        # Fold '.' (insertion convention) into '-'
+        column = [c if c != "." else "-" for c in column]
+
+        freqs: dict[str, int] = {}
+        for aa in column:
+            freqs[aa] = freqs.get(aa, 0) + 1
+
+        counts = np.array(list(freqs.values()), dtype=float)
+        nonzero = counts[counts > 0]
+        if nonzero.sum() == 0:
+            continue
+        probs = nonzero / nonzero.sum()
+        col_entropies.append(float(shannon_entropy(probs, base=2)))
+
+    if not col_entropies:
+        return float("nan")
+    return float(np.mean(col_entropies))

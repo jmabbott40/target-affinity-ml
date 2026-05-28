@@ -209,3 +209,203 @@ def test_compute_msa_real_jackhmmer(tmp_path):
     msa = compute_msa("P00533", db_path=db, out_dir=tmp_path, n_iter=1, n_cpu=4)
     assert msa.exists()
     assert msa.stat().st_size > 1000  # nontrivial alignment
+
+
+# ---------------------------------------------------------------------------
+# Helpers for P3-T5 unit tests
+# ---------------------------------------------------------------------------
+
+
+def _build_tiny_structure_with_known_geometry():
+    """Return a 5-residue Bio.PDB Structure with CA atoms on a straight line.
+
+    Residues 1-5 are placed with CA coordinates at:
+      1: (0.0,   0.0, 0.0)
+      2: (3.8,   0.0, 0.0)
+      3: (7.6,   0.0, 0.0)
+      4: (11.4,  0.0, 0.0)
+      5: (15.2,  0.0, 0.0)
+
+    This means:
+      - Residues 1, 2, 3 are all mutually within 8 Å of each other.
+      - Residue 4 is 8.0 Å from residue 2 (just at the boundary) and 7.6 Å
+        from residue 3, so it counts as a neighbor of 3 but just at/over the
+        boundary for 2.
+      - Residue 5 (15.2 Å from residue 1) is far from 1-3 and outside the
+        8 Å radius for residues 1-3.
+
+    The one-character amino-acid codes cycle through A, G, K, L, A.
+    """
+    from Bio.PDB import Structure, Model, Chain, Residue, Atom
+    import numpy as np
+
+    structure = Structure.Structure("test")
+    model = Model.Model(0)
+    chain = Chain.Chain("A")
+
+    # Amino-acid codes (index 0 → residue 1, etc.)
+    aa_codes = ["ALA", "GLY", "LYS", "LEU", "ALA"]
+    coords = [
+        (0.0,  0.0, 0.0),
+        (3.8,  0.0, 0.0),
+        (7.6,  0.0, 0.0),
+        (11.4, 0.0, 0.0),
+        (15.2, 0.0, 0.0),
+    ]
+
+    for i, (resname, coord) in enumerate(zip(aa_codes, coords), start=1):
+        res = Residue.Residue((" ", i, " "), resname, " ")
+        ca = Atom.Atom(
+            name="CA",
+            coord=np.array(coord, dtype="f"),
+            bfactor=0.0,
+            occupancy=1.0,
+            altloc=" ",
+            fullname=" CA ",
+            serial_number=i,
+            element="C",
+        )
+        res.add(ca)
+        chain.add(res)
+
+    model.add(chain)
+    structure.add(model)
+    return structure
+
+
+def _build_synthetic_msa(
+    n_seqs: int = 5,
+    length: int = 10,
+    conserved_positions: list[int] | None = None,
+) -> str:
+    """Return a minimal Stockholm-format MSA string.
+
+    The query sequence (first entry, id="query") contains 'A' at conserved
+    positions and a cycling alphabet ('A','C','D','E','F','G','H','I','K','L')
+    at variable positions.  All homologs share the conserved positions ('A')
+    but independently randomize the variable positions.
+
+    Position indices in *conserved_positions* are 1-based (matching residue
+    numbering convention used throughout the codebase).
+
+    Returns a Stockholm-format string ready to write to a .sto file.
+    """
+    import random
+
+    rng = random.Random(42)
+    amino_acids = "ACDEFGHIKLMNPQRSTVWY"
+    conserved = set(conserved_positions or [])
+
+    # Build the query sequence: 'A' at conserved positions, others vary
+    query_bases = []
+    for pos in range(1, length + 1):
+        if pos in conserved:
+            query_bases.append("A")
+        else:
+            query_bases.append(rng.choice(amino_acids))
+    query_seq = "".join(query_bases)
+
+    lines = ["# STOCKHOLM 1.0", f"query {query_seq}"]
+
+    # Build homolog sequences
+    for idx in range(1, n_seqs):
+        seq_chars = []
+        for pos in range(1, length + 1):
+            if pos in conserved:
+                seq_chars.append("A")  # conserved: all homologs agree
+            else:
+                seq_chars.append(rng.choice(amino_acids))
+        lines.append(f"seq{idx} {''.join(seq_chars)}")
+
+    lines.append("//")
+    return "\n".join(lines) + "\n"
+
+
+def _build_synthetic_msa_with_varying_conservation() -> str:
+    """Return a Stockholm MSA where position 2 is highly conserved (all 'A')
+    and position 3 is maximally variable (each sequence has a different AA).
+
+    The MSA has 10 sequences, each of length 5.  Column index 1 is position 1,
+    column index 2 is position 2, etc. (1-based, no gaps in the query).
+    """
+    seqs = {
+        "query": "AAKLD",
+        "seq1":  "AACFD",
+        "seq2":  "AAEVD",
+        "seq3":  "AAGWD",
+        "seq4":  "AAIMD",
+        "seq5":  "AAPQD",
+        "seq6":  "AARSD",
+        "seq7":  "AAVTD",
+        "seq8":  "AAYND",
+        "seq9":  "AAHHD",
+    }
+    lines = ["# STOCKHOLM 1.0"]
+    for name, seq in seqs.items():
+        lines.append(f"{name} {seq}")
+    lines.append("//")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# compute_per_residue_rns tests (P3-T5)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_per_residue_rns_returns_normalized_scores(tmp_path):
+    """RNS scores are floats in [0, 1] for each binding-site residue with valid neighborhoods."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns
+
+    structure = _build_tiny_structure_with_known_geometry()
+    msa_path = tmp_path / "test.sto"
+    msa_path.write_text(_build_synthetic_msa(n_seqs=5, length=10, conserved_positions=[2, 3]))
+    scores = compute_per_residue_rns(structure, binding_site=[2, 3], msa_path=msa_path)
+    # Only binding-site residues should appear as keys
+    assert set(scores.keys()).issubset({2, 3})
+    # All scores must be in [0, 1]
+    assert all(0.0 <= v <= 1.0 for v in scores.values()), f"Out-of-range scores: {scores}"
+
+
+def test_compute_per_residue_rns_higher_score_for_more_conserved(tmp_path):
+    """A residue with a more-conserved neighborhood gets a higher RNS than one with a more-variable neighborhood."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns
+
+    structure = _build_tiny_structure_with_known_geometry()
+    msa_path = tmp_path / "test.sto"
+    # Position 2 is highly conserved (all sequences agree);
+    # position 3 is variable across the 10 sequences
+    msa_path.write_text(_build_synthetic_msa_with_varying_conservation())
+    scores = compute_per_residue_rns(structure, binding_site=[2, 3], msa_path=msa_path)
+    if 2 in scores and 3 in scores:
+        assert scores[2] >= scores[3], (
+            f"Expected conserved residue (pos 2, score {scores[2]:.4f}) >= "
+            f"variable residue (pos 3, score {scores[3]:.4f})"
+        )
+
+
+def test_compute_per_residue_rns_skips_missing_residue(tmp_path):
+    """A binding-site residue not present in the structure is excluded from output (not an exception)."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_per_residue_rns
+
+    structure = _build_tiny_structure_with_known_geometry()  # has residues 1-5
+    msa_path = tmp_path / "test.sto"
+    msa_path.write_text(_build_synthetic_msa(n_seqs=5, length=10))
+    # residue 999 is not in the structure
+    scores = compute_per_residue_rns(structure, binding_site=[2, 999], msa_path=msa_path)
+    assert 999 not in scores
+    # key assertion: no exception was raised (we reach this line successfully)
+
+
+def test_compute_conservation_entropy_lower_for_more_conserved(tmp_path):
+    """Conservation entropy is lower for highly-conserved binding-site columns."""
+    from target_affinity_ml.benchmarks.rns_scoring import compute_conservation_entropy
+
+    msa_path = tmp_path / "test.sto"
+    # conserved_positions=[2, 3] → all seqs agree on those columns → near-zero entropy
+    msa_path.write_text(_build_synthetic_msa(n_seqs=10, length=10, conserved_positions=[2, 3]))
+    h_conserved = compute_conservation_entropy([2, 3], msa_path)
+    # positions 5 and 7 are variable → higher entropy
+    h_variable = compute_conservation_entropy([5, 7], msa_path)
+    assert h_conserved < h_variable, (
+        f"Expected conserved entropy ({h_conserved:.4f}) < variable entropy ({h_variable:.4f})"
+    )
