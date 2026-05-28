@@ -431,3 +431,121 @@ def test_compute_conservation_entropy_lower_for_more_conserved(tmp_path):
     assert h_conserved < h_variable, (
         f"Expected conserved entropy ({h_conserved:.4f}) < variable entropy ({h_variable:.4f})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helper for P3-T6 unit tests
+# ---------------------------------------------------------------------------
+
+
+def _build_tiny_structure_with_plddt(plddt_map: dict[int, float]):
+    """Return a Bio.PDB Structure with CA atoms, using plddt_map values as B-factors.
+
+    *plddt_map* maps residue_idx (1-based int) → pLDDT value (float).
+    Each residue is placed at an arbitrary coordinate; only the B-factor
+    (used by _get_residue_plddt to read pLDDT) matters for the tests.
+    """
+    from Bio.PDB import Structure, Model, Chain, Residue, Atom
+    import numpy as np
+
+    structure = Structure.Structure("plddt_test")
+    model = Model.Model(0)
+    chain = Chain.Chain("A")
+
+    for i, (res_idx, plddt_val) in enumerate(sorted(plddt_map.items())):
+        res = Residue.Residue((" ", res_idx, " "), "ALA", " ")
+        ca = Atom.Atom(
+            name="CA",
+            coord=np.array([float(i) * 3.8, 0.0, 0.0], dtype="f"),
+            bfactor=float(plddt_val),
+            occupancy=1.0,
+            altloc=" ",
+            fullname=" CA ",
+            serial_number=i + 1,
+            element="C",
+        )
+        res.add(ca)
+        chain.add(res)
+
+    model.add(chain)
+    structure.add(model)
+    return structure
+
+
+# ---------------------------------------------------------------------------
+# aggregate_target_rns + validation_gate tests (P3-T6)
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_target_rns_pdb_uniform_weights(tmp_path):
+    """PDB structures use uniform-weight mean over per-residue RNS."""
+    from target_affinity_ml.benchmarks.rns_scoring import aggregate_target_rns
+    per_residue = {10: 0.6, 20: 0.8, 30: 0.4}
+    prov = {"source": "PDB"}
+    result = aggregate_target_rns(per_residue, prov, structure=None, use_plddt_weighting=True)
+    assert abs(result - 0.6) < 1e-6  # (0.6 + 0.8 + 0.4) / 3
+
+
+def test_aggregate_target_rns_alphafold_plddt_weighted(tmp_path):
+    """AlphaFold structures apply pLDDT weighting."""
+    from target_affinity_ml.benchmarks.rns_scoring import aggregate_target_rns
+    # Build a tiny structure with controlled pLDDT values in bfactors
+    structure = _build_tiny_structure_with_plddt({10: 90.0, 20: 70.0, 30: 40.0})
+    per_residue = {10: 0.6, 20: 0.8, 30: 0.4}
+    prov = {"source": "AlphaFold"}
+    result = aggregate_target_rns(per_residue, prov, structure=structure)
+    # weights: residue 10 = max(0, (90-50)/50) = 0.8
+    #          residue 20 = max(0, (70-50)/50) = 0.4
+    #          residue 30 = max(0, (40-50)/50) = 0.0
+    # weighted mean = (0.6*0.8 + 0.8*0.4 + 0.4*0.0) / (0.8 + 0.4 + 0.0) = 0.8 / 1.2 = 0.6667
+    assert abs(result - 0.6667) < 0.001
+
+
+def test_aggregate_target_rns_empty_returns_nan(tmp_path):
+    """Empty per-residue dict returns nan."""
+    import math
+    from target_affinity_ml.benchmarks.rns_scoring import aggregate_target_rns
+    result = aggregate_target_rns({}, {"source": "PDB"}, structure=None)
+    assert math.isnan(result)
+
+
+def test_validation_gate_pass_path(tmp_path, monkeypatch):
+    """validation_gate returns passed=True when our values rank-correlate with reference."""
+    from target_affinity_ml.benchmarks import rns_scoring
+    # Mock the heavy pipeline calls
+    def fake_fetch(uid, cache_dir, **kw): return ("fake_structure", {"source": "PDB"})
+    def fake_msa(uid, db, out): out.mkdir(parents=True, exist_ok=True); return out / f"{uid}.sto"
+    def fake_per_res(s, bs, m): return {r: 0.1 * i for i, r in enumerate(bs, 1)}
+    # Return values that correlate with the reference: rank order matches ConSurf
+    # 8 reference proteins in order: EGFR(0.88), ABL1(0.85), CDK2(0.82), p38(0.79),
+    # HSP90(0.75), ADRB2(0.71), p53(0.68), HIV-pr(0.62)
+    _pass_seq = iter([0.88, 0.85, 0.82, 0.79, 0.75, 0.71, 0.68, 0.62])
+    def fake_agg(pr, p, s, **kw): return next(_pass_seq)
+    monkeypatch.setattr(rns_scoring, "fetch_structure", fake_fetch)
+    monkeypatch.setattr(rns_scoring, "compute_msa", fake_msa)
+    monkeypatch.setattr(rns_scoring, "compute_per_residue_rns", fake_per_res)
+    monkeypatch.setattr(rns_scoring, "aggregate_target_rns", fake_agg)
+
+    passed, dev, csv = rns_scoring.validation_gate(cache_dir=tmp_path, db_path=Path("/fake"))
+    assert passed is True
+    assert dev["spearman_rho"] > 0.9  # perfect rank order
+
+
+def test_validation_gate_fail_path(tmp_path, monkeypatch):
+    """validation_gate returns passed=False when our values are uncorrelated with reference."""
+    from target_affinity_ml.benchmarks import rns_scoring
+    def fake_fetch(uid, cache_dir, **kw): return ("fake_structure", {"source": "PDB"})
+    def fake_msa(uid, db, out): out.mkdir(parents=True, exist_ok=True); return out / f"{uid}.sto"
+    def fake_per_res(s, bs, m): return {r: 0.5 for r in bs}
+    # Return values UNCORRELATED with the ConSurf reference (random-ish)
+    bad_vals = iter([0.20, 0.95, 0.45, 0.60, 0.15, 0.85, 0.30, 0.55])
+    def fake_agg(pr, p, s, **kw): return next(bad_vals)
+    monkeypatch.setattr(rns_scoring, "fetch_structure", fake_fetch)
+    monkeypatch.setattr(rns_scoring, "compute_msa", fake_msa)
+    monkeypatch.setattr(rns_scoring, "compute_per_residue_rns", fake_per_res)
+    monkeypatch.setattr(rns_scoring, "aggregate_target_rns", fake_agg)
+
+    passed, dev, csv = rns_scoring.validation_gate(cache_dir=tmp_path, db_path=Path("/fake"))
+    # MAD = mean(|our - ref|) — with chosen values, will exceed 0.10 threshold
+    # Spearman correlation is low/negative because rank order is jumbled
+    assert passed is False  # both criteria miss

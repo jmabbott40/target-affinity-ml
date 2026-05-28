@@ -886,6 +886,171 @@ def compute_per_residue_rns(
     return rns_scores
 
 
+def _get_residue_plddt(structure: Any, residue_idx: int) -> float:
+    """Extract pLDDT from CA atom's bfactor field. Returns 50.0 if residue/CA missing."""
+    for model in structure:
+        for chain in model:
+            for res in chain:
+                if res.id[0] == " " and res.id[1] == residue_idx:
+                    if "CA" in res:
+                        return float(res["CA"].get_bfactor())
+                    return 50.0
+    return 50.0
+
+
+def aggregate_target_rns(
+    per_residue_rns: dict[int, float],
+    provenance: dict,
+    structure: Any,
+    use_plddt_weighting: bool = True,
+) -> float:
+    """Aggregate per-residue RNS to a single per-target value.
+
+    For AlphaFold structures, applies pLDDT weighting (spec 5.4 Tier 2):
+    residues below pLDDT 50 contribute nothing, residues at 90+ contribute fully.
+    PDB structures use uniform weights.
+
+    Formula (AlphaFold + use_plddt_weighting=True):
+        target_RNS = sum(rns × w) / sum(w)
+        where w = max(0.0, (pLDDT - 50) / 50)
+
+    Formula (PDB or use_plddt_weighting=False):
+        target_RNS = mean(rns)  (uniform weighting)
+
+    Returns nan if per_residue_rns is empty or if the AlphaFold case has zero
+    total weight (all binding-site residues have pLDDT < 50).
+    """
+    if not per_residue_rns:
+        return float("nan")
+
+    use_af_weighting = (
+        use_plddt_weighting
+        and provenance.get("source") == "AlphaFold"
+        and structure is not None
+    )
+
+    if use_af_weighting:
+        weighted_sum = 0.0
+        total_weight = 0.0
+        for residue_idx, rns in per_residue_rns.items():
+            plddt = _get_residue_plddt(structure, residue_idx)
+            w = max(0.0, (plddt - 50.0) / 50.0)
+            weighted_sum += rns * w
+            total_weight += w
+        if total_weight == 0.0:
+            return float("nan")
+        return weighted_sum / total_weight
+    else:
+        # Uniform weighting (PDB or use_plddt_weighting=False)
+        values = list(per_residue_rns.values())
+        return sum(values) / len(values)
+
+
+def validation_gate(
+    cache_dir: Path,
+    db_path: Path,
+    reference_set: str = "prabakaran_bromberg",
+    spearman_threshold: float = 0.7,
+    mad_threshold: float = 0.10,
+) -> tuple[bool, dict, Path]:
+    """Run the full RNS pipeline on bundled reference proteins; compare to published.
+
+    Returns
+    -------
+    (passed, deviations_dict, summary_csv_path)
+
+    passed = True iff Spearman rho >= spearman_threshold OR MAD <= mad_threshold.
+    summary_csv has one row per reference protein with: name, uniprot, our_rns,
+    published_rns, abs_dev (or error field if pipeline failed for that protein).
+    """
+    import math
+    import pandas as pd
+    from scipy.stats import spearmanr
+
+    if reference_set != "prabakaran_bromberg":
+        raise ValueError(
+            f"reference_set must be 'prabakaran_bromberg', got {reference_set!r}. "
+            "Alternative reference sets are not yet supported."
+        )
+
+    # Load bundled reference data
+    ref_data_path = Path(__file__).parent / "_rns_reference_data.json"
+    with ref_data_path.open() as fh:
+        ref_data = json.load(fh)
+
+    reference_proteins = ref_data["reference_proteins"]
+    cache_dir = Path(cache_dir)
+    msa_dir = cache_dir / "msas"
+
+    rows: list[dict] = []
+    for protein in reference_proteins:
+        name = protein["name"]
+        uniprot = protein["uniprot"]
+        published_rns = protein["published_target_rns"]
+        binding_site = protein["binding_site_residues"]
+
+        try:
+            structure, prov = fetch_structure(
+                uniprot, cache_dir, pdb_id=protein.get("pdb_id")
+            )
+            msa_path = compute_msa(uniprot, db_path, msa_dir)
+            per_residue = compute_per_residue_rns(structure, binding_site, msa_path)
+            our_rns = aggregate_target_rns(per_residue, prov, structure)
+            rows.append({
+                "name": name,
+                "uniprot": uniprot,
+                "our_rns": our_rns,
+                "published_rns": published_rns,
+                "abs_dev": abs(our_rns - published_rns) if not math.isnan(our_rns) else float("nan"),
+                "error": None,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("validation_gate: pipeline failed for %s (%s): %s", name, uniprot, exc)
+            rows.append({
+                "name": name,
+                "uniprot": uniprot,
+                "our_rns": float("nan"),
+                "published_rns": published_rns,
+                "abs_dev": float("nan"),
+                "error": str(exc),
+            })
+
+    df = pd.DataFrame(rows)
+    summary_csv_path = cache_dir / "rns_validation_summary.csv"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(summary_csv_path, index=False)
+
+    # Filter to rows where pipeline succeeded (our_rns is not nan)
+    succeeded = df[df["our_rns"].notna() & ~df["our_rns"].apply(math.isnan)]
+    n_succeeded = len(succeeded)
+
+    min_required = 5
+    if n_succeeded < min_required:
+        deviations = {
+            "spearman_rho": float("nan"),
+            "mad": float("nan"),
+            "n_succeeded": n_succeeded,
+            "diagnostic": (
+                f"Only {n_succeeded} of {len(reference_proteins)} reference proteins "
+                f"succeeded — minimum {min_required} required for a reliable gate."
+            ),
+        }
+        return False, deviations, summary_csv_path
+
+    rho, _ = spearmanr(succeeded["our_rns"].values, succeeded["published_rns"].values)
+    mad = float(succeeded["abs_dev"].mean())
+
+    passed = bool(rho >= spearman_threshold or mad <= mad_threshold)
+
+    deviations = {
+        "spearman_rho": float(rho),
+        "mad": mad,
+        "n_succeeded": n_succeeded,
+    }
+
+    return passed, deviations, summary_csv_path
+
+
 def compute_conservation_entropy(
     binding_site: list[int],
     msa_path: Path,
