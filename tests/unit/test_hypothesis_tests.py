@@ -150,6 +150,44 @@ def test_h1_ci_bounds_bracket_mean_diff_loosely(synthetic_per_seed):
         assert row["ci_low"] <= row["ci_high"]
 
 
+def test_h1_ci_brackets_engineered_mean_diff(synthetic_per_seed):
+    """Engineered RF-advantage (mean_diff ~ -0.15) should fall inside the CI."""
+    from target_affinity_ml.benchmarks.hypothesis_tests import h1_rf_vs_deep
+
+    result = h1_rf_vs_deep(synthetic_per_seed)
+    row = result.query(
+        "model_pair == 'random_forest_vs_esm_fp_mlp' and `class` == 'kinase' and split == 'scaffold'"
+    )
+    assert len(row) == 1
+    md = row.iloc[0]["mean_diff"]
+    lo = row.iloc[0]["ci_low"]
+    hi = row.iloc[0]["ci_high"]
+    assert lo <= md <= hi, f"mean_diff {md} not bracketed by CI [{lo}, {hi}]"
+
+
+def test_h1_bonferroni_uses_pre_registered_family_size(synthetic_per_seed):
+    """Bonferroni denominator should be the pre-registered N_TESTS_H1=12
+    regardless of how many rows survive, even if some cells are skipped."""
+    from target_affinity_ml.benchmarks.hypothesis_tests import (
+        N_TESTS_H1,
+        h1_rf_vs_deep,
+    )
+
+    # Drop a single (model, class, split, seed) row to force a skip
+    # downstream. We strip every seed for the (kinase, target) cell of
+    # esm_fp_mlp; the corresponding test should be skipped.
+    df = synthetic_per_seed.copy()
+    df = df.query(
+        "not (model == 'esm_fp_mlp' and `class` == 'kinase' and split == 'target')"
+    )
+    result = h1_rf_vs_deep(df)
+    # The (esm_fp_mlp, kinase, target) row should be gone; rest should survive
+    assert len(result) == N_TESTS_H1 - 1
+    for _, row in result.iterrows():
+        expected = min(row["p_raw"] * N_TESTS_H1, 1.0)
+        assert math.isclose(row["p_bonferroni"], expected, rel_tol=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # H2: Split degradation
 # ---------------------------------------------------------------------------
@@ -216,6 +254,22 @@ def test_h2_verdict_strings_within_expected_set(synthetic_per_seed):
     assert set(per_model["verdict"].unique()).issubset(
         {"a) within range", "b) below", "c) above"}
     )
+
+
+def test_h2_in_range_uses_nullable_boolean_dtype(synthetic_per_seed):
+    """P3-T15 code review: in_range column should use nullable BooleanDtype
+    (pd.NA for the interaction row), not object dtype from a float NaN."""
+    from target_affinity_ml.benchmarks.hypothesis_tests import h2_split_degradation
+
+    result = h2_split_degradation(synthetic_per_seed)
+    assert str(result["in_range"].dtype) == "boolean"
+    # Interaction row should be pd.NA
+    interaction = result.query("transition == 'class_x_split_interaction'")
+    assert pd.isna(interaction.iloc[0]["in_range"])
+    # Per-model rows should be actual booleans
+    per_model = result.query("transition != 'class_x_split_interaction'")
+    for v in per_model["in_range"]:
+        assert v is True or v is False or v in (True, False)
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +409,12 @@ def test_h4_returns_dataframe_with_expected_columns(synthetic_per_seed):
         "diff",
         "ci_low",
         "ci_high",
-        "p_value",
         "verdict",
     }
     assert expected.issubset(set(result.columns))
+    # P3-T15 code review: the misleading binomial p_value column was dropped;
+    # the bootstrap CI on diff is the primary inference.
+    assert "p_value" not in result.columns
 
 
 def test_h4_row_count(synthetic_per_seed):

@@ -46,6 +46,16 @@ __all__ = [
 _H2_RANDOM_TO_SCAFFOLD_RANGE = (0.12, 0.52)
 _H2_SCAFFOLD_TO_TARGET_RANGE = (0.25, 0.60)
 
+# Pre-registered hypothesis-test family sizes. Bonferroni divides by these
+# constants — never by the surviving row count — so a skipped cell can never
+# weaken the multiple-comparison correction.
+N_TESTS_H1 = 12  # 2 model_pairs × 2 classes × 3 splits
+N_TESTS_H3 = 6  # 2 classes × 3 splits
+
+# If |multi_mean_diff| falls below this tolerance, the cell is effectively at
+# zero and the flip-rate sign comparison is undefined (sign(0) ambiguity).
+_FLIP_RATE_MULTI_MEAN_TOL = 1e-10
+
 
 # ---------------------------------------------------------------------------
 # H1
@@ -88,6 +98,13 @@ def h1_rf_vs_deep(
         - ``verdict`` is ``"RF wins"`` (mean_diff < 0 and p_bonferroni <
           0.05), ``"RF loses"`` (mean_diff > 0 and p_bonferroni < 0.05), or
           ``"ties"`` otherwise.
+
+    Notes
+    -----
+    The 5-seed paired bootstrap CIs reported here have degraded nominal
+    coverage at n_seeds < 10; they're reported for transparency rather than
+    as strict inference. Use them as ballpark bounds, not formal hypothesis
+    tests.
     """
     _validate_per_seed(per_seed)
 
@@ -140,10 +157,15 @@ def h1_rf_vs_deep(
                 )
 
     df = pd.DataFrame(rows)
-    n_tests = len(df)
-    if n_tests == 0:
+    if len(df) == 0:
         return df
-    df["p_bonferroni"] = (df["p_raw"] * n_tests).clip(upper=1.0)
+    df["p_bonferroni"] = (df["p_raw"] * N_TESTS_H1).clip(upper=1.0)
+    if len(df) < N_TESTS_H1:
+        logger.warning(
+            "h1_rf_vs_deep: only %d/%d planned tests had complete data; "
+            "Bonferroni still divides by %d per the pre-registered plan",
+            len(df), N_TESTS_H1, N_TESTS_H1,
+        )
     df["verdict"] = df.apply(_h1_verdict, axis=1)
     return df
 
@@ -240,7 +262,10 @@ def h2_split_degradation(per_seed: pd.DataFrame) -> pd.DataFrame:
                 }
             )
 
-    # Class × split interaction row
+    # Class × split interaction row. ``in_range`` is meaningless for this
+    # summary row; we use ``pd.NA`` + nullable BooleanDtype so the column
+    # stays bool-typed (the float-NaN alternative coerced the whole column
+    # to object dtype).
     inter = class_split_interaction(per_seed)
     rows.append(
         {
@@ -248,11 +273,13 @@ def h2_split_degradation(per_seed: pd.DataFrame) -> pd.DataFrame:
             "class": "*",
             "transition": "class_x_split_interaction",
             "ratio": float("nan"),
-            "in_range": float("nan"),
+            "in_range": pd.NA,
             "verdict": f"interaction p={inter['interaction_p']:.4g}",
         }
     )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df["in_range"] = df["in_range"].astype("boolean")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +340,13 @@ def h3_esm_target_advantage(
         on target for both classes), ``"b) ESM-2 still helps GPCR target"``
         (interaction n.s. with ESM advantage GPCR-favoured on target), or
         ``"c) ESM-2 never helps GPCRs"`` (otherwise).
+
+    Notes
+    -----
+    The 5-seed paired bootstrap CIs reported here have degraded nominal
+    coverage at n_seeds < 10; they're reported for transparency rather than
+    as strict inference. Use them as ballpark bounds, not formal hypothesis
+    tests.
     """
     _validate_per_seed(per_seed)
 
@@ -358,9 +392,14 @@ def h3_esm_target_advantage(
             )
 
     av = pd.DataFrame(rows)
-    n_tests = len(av)
-    if n_tests > 0:
-        av["p_bonferroni"] = (av["p_raw"] * n_tests).clip(upper=1.0)
+    if len(av) > 0:
+        av["p_bonferroni"] = (av["p_raw"] * N_TESTS_H3).clip(upper=1.0)
+        if len(av) < N_TESTS_H3:
+            logger.warning(
+                "h3_esm_target_advantage: only %d/%d planned tests had complete "
+                "data; Bonferroni still divides by %d per the pre-registered plan",
+                len(av), N_TESTS_H3, N_TESTS_H3,
+            )
         av["verdict"] = av.apply(_h3_advantage_verdict, axis=1)
         av = av.drop(columns=["p_raw"])
 
@@ -464,8 +503,10 @@ def h4_single_seed_flip_rate(
 
     For each (model_pair × split), counts the fraction of (class, seed)
     cells where ``sign(rmse_a − rmse_b)_seed ≠ sign(mean_diff)``. Per-class
-    rates + their difference + bootstrap CI on the difference + binomial p
-    on whether the difference looks larger than the prior of ``flip_diff_tol``.
+    rates + their between-class difference + bootstrap CI on the difference.
+    The verdict is derived from the size of ``diff`` relative to
+    ``flip_diff_tol``; the bootstrap CI on ``diff`` is the primary inference
+    on whether the kinase and GPCR flip rates differ.
 
     Parameters
     ----------
@@ -483,7 +524,14 @@ def h4_single_seed_flip_rate(
     -------
     pd.DataFrame
         Columns: ``model_pair, split, flip_rate_kinase, flip_rate_gpcr,
-        diff, ci_low, ci_high, p_value, verdict``.
+        diff, ci_low, ci_high, verdict``.
+
+    Notes
+    -----
+    The 5-seed paired bootstrap CIs reported here have degraded nominal
+    coverage at n_seeds < 10; they're reported for transparency rather than
+    as strict inference. Use them as ballpark bounds, not formal hypothesis
+    tests.
     """
     _validate_per_seed(per_seed)
 
@@ -520,9 +568,16 @@ def h4_single_seed_flip_rate(
                     continue
                 rf_vals = rf_seeds.loc[common].to_numpy(dtype=float)
                 deep_vals = deep_seeds.loc[common].to_numpy(dtype=float)
-                multi_mean_diff = float(np.mean(rf_vals - deep_vals))
-                multi_sign = np.sign(multi_mean_diff) if multi_mean_diff != 0 else 0
-                per_seed_signs = np.sign(rf_vals - deep_vals)
+                diffs = rf_vals - deep_vals
+                multi_mean_diff = float(np.mean(diffs))
+                if abs(multi_mean_diff) < _FLIP_RATE_MULTI_MEAN_TOL:
+                    # Cell is too close to zero; flip rate is undefined
+                    # (every nonzero per-seed sign would register as a flip).
+                    class_rates[class_] = float("nan")
+                    class_flip_arrays[class_] = np.array([], dtype=float)
+                    continue
+                multi_sign = np.sign(multi_mean_diff)
+                per_seed_signs = np.sign(diffs)
                 flips = (per_seed_signs != multi_sign).astype(float)
                 class_flip_arrays[class_] = flips
                 class_rates[class_] = float(flips.mean()) if len(flips) else float("nan")
@@ -531,17 +586,16 @@ def h4_single_seed_flip_rate(
             gpcr_rate = class_rates.get("gpcr_aminergic", float("nan"))
             diff = kinase_rate - gpcr_rate
 
-            # Bootstrap CI on the difference of mean flip-rates
+            # Bootstrap CI on the difference of mean flip-rates. This CI
+            # is the primary inference on whether the two class flip rates
+            # differ; we deliberately do not report a binomial p_value here
+            # (the GPCR rate is itself a noisy 5-seed estimate, not a fixed
+            # null probability).
             kinase_flips = class_flip_arrays.get("kinase", np.array([], dtype=float))
             gpcr_flips = class_flip_arrays.get("gpcr_aminergic", np.array([], dtype=float))
             ci_low, ci_high = _bootstrap_ci_diff_of_means(
                 kinase_flips, gpcr_flips, n_bootstrap=n_bootstrap, rng=rng
             )
-
-            # Binomial test: is the kinase flip rate's nominal count
-            # significantly different from the GPCR rate treated as the
-            # null probability? scipy.stats.binomtest is the modern API.
-            p_value = _flip_rate_binom_p(kinase_flips, gpcr_rate)
 
             if math.isnan(diff):
                 verdict = "a) similar"
@@ -561,32 +615,11 @@ def h4_single_seed_flip_rate(
                     "diff": diff,
                     "ci_low": ci_low,
                     "ci_high": ci_high,
-                    "p_value": p_value,
                     "verdict": verdict,
                 }
             )
 
     return pd.DataFrame(rows)
-
-
-def _flip_rate_binom_p(kinase_flips: np.ndarray, gpcr_rate: float) -> float:
-    """Binomial test on the kinase flip count vs the GPCR rate as null prob.
-
-    Two-sided. Returns NaN if inputs are empty or the GPCR rate is NaN.
-    """
-    if len(kinase_flips) == 0 or math.isnan(gpcr_rate):
-        return float("nan")
-    n = len(kinase_flips)
-    k = int(kinase_flips.sum())
-    # Clamp gpcr_rate to (eps, 1-eps) for the binomtest call.
-    eps = 1e-9
-    p_null = float(np.clip(gpcr_rate, eps, 1 - eps))
-    try:
-        res = stats.binomtest(k=k, n=n, p=p_null, alternative="two-sided")
-        return float(res.pvalue)
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("binomtest failed (k=%d, n=%d, p=%.4f): %s", k, n, p_null, exc)
-        return float("nan")
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +701,13 @@ def _bootstrap_ci_mean(
     """Percentile bootstrap CI on the mean of ``values``.
 
     Returns ``(NaN, NaN)`` if ``values`` is empty.
+
+    Notes
+    -----
+    The 5-seed paired bootstrap CIs computed by the H1/H3/H4 callers have
+    degraded nominal coverage at n_seeds < 10; they're reported for
+    transparency rather than as strict inference. Use them as ballpark
+    bounds, not formal hypothesis tests.
     """
     values = np.asarray(values, dtype=float)
     if len(values) == 0:
