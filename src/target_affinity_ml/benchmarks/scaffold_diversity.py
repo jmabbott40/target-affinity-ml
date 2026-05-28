@@ -153,6 +153,18 @@ def fit_degradation_regression(
     import statsmodels.formula.api as smf
 
     df = per_target.dropna(subset=[metric_col, degradation_col, class_col]).copy()
+
+    if df[metric_col].nunique() <= 1:
+        raise ValueError(
+            f"metric_col {metric_col!r} has zero variance after NaN-drop "
+            f"(unique values: {df[metric_col].nunique()}); cannot fit slope."
+        )
+    if df[degradation_col].nunique() <= 1:
+        raise ValueError(
+            f"degradation_col {degradation_col!r} has zero variance after NaN-drop "
+            f"(unique values: {df[degradation_col].nunique()}); cannot fit regression."
+        )
+
     classes = sorted(df[class_col].unique())
     if len(classes) < 2:
         raise ValueError(
@@ -160,16 +172,25 @@ def fit_degradation_regression(
             f"got {len(classes)}: {classes}"
         )
 
+    n_per_class = {cls: int((df[class_col] == cls).sum()) for cls in classes}
+    for cls, n in n_per_class.items():
+        if n < 3:
+            raise ValueError(
+                f"class {cls!r} has only {n} observations (need ≥3 to estimate "
+                f"slope + CI per class)"
+            )
+
     # Rename columns to safe identifiers for the statsmodels formula parser.
     df = df.rename(columns={metric_col: "_X", degradation_col: "_Y", class_col: "_C"})
-    formula = "_Y ~ _X * C(_C)"
+    # Use repr() so single quotes wrap the class name safely in the formula string.
+    ref_class = classes[0]
+    formula = f"_Y ~ _X * C(_C, Treatment(reference={ref_class!r}))"
     model = smf.ols(formula, data=df).fit()
 
     # Per-class slopes: with Treatment-coded categorical, the reference class
     # slope is the coefficient on "_X". Each non-reference class's slope is
-    # "_X" + "_X:C(_C)[T.<class>]" interaction. statsmodels picks the first
-    # sorted level as the reference by default.
-    ref_class = classes[0]
+    # "_X" + interaction term. Treatment reference is now explicit so parameter
+    # names are deterministic across statsmodels versions.
     main_slope = float(model.params["_X"])
     conf = model.conf_int(alpha=alpha)
     main_slope_ci_low = float(conf.loc["_X", 0])
@@ -187,8 +208,9 @@ def fit_degradation_regression(
 
     # Build per-class slopes for non-reference classes via the linear-combination
     # of "_X" + interaction term using model.t_test (gives proper CI + p-value).
+    interaction_prefix = f"_X:C(_C, Treatment(reference={ref_class!r}))"
     for cls in classes[1:]:
-        interaction_key = f"_X:C(_C)[T.{cls}]"
+        interaction_key = f"{interaction_prefix}[T.{cls}]"
         contrast = f"_X + {interaction_key} = 0"
         tt = model.t_test(contrast)
         slope_cls = float(tt.effect[0])
@@ -202,7 +224,7 @@ def fit_degradation_regression(
 
     # Interaction p-value: joint F-test across all interaction terms (slope
     # differences from the reference class).
-    interaction_terms = [k for k in model.params.index if k.startswith("_X:C(_C)")]
+    interaction_terms = [k for k in model.params.index if k.startswith(interaction_prefix)]
     if interaction_terms:
         constraint = ", ".join(f"{t} = 0" for t in interaction_terms)
         ft = model.f_test(constraint)
@@ -219,7 +241,7 @@ def fit_degradation_regression(
         "intercept_p": float(model.pvalues["Intercept"]),
         "slopes": slopes,
         "interaction_p": interaction_p,
-        "n_per_class": {cls: int((df["_C"] == cls).sum()) for cls in classes},
+        "n_per_class": n_per_class,
         "alpha": alpha,
     }
 

@@ -318,3 +318,57 @@ def test_fit_degradation_regression_n_per_class():
     df = _make_synthetic_regression_df(n_per_class=40)
     result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
     assert result["n_per_class"] == {"kinase": 40, "gpcr_aminergic": 40}
+
+
+def test_fit_degradation_regression_three_class_joint_f_test():
+    """Joint F-test exercise: ≥3 classes with one differing slope detects via interaction.
+
+    Plan 3 only uses 2 classes, but the function is general; this guards the
+    multi-term constraint construction for the joint F-test.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed=42)
+    rows = []
+    # Three classes; class C differs in slope; n=50 per class for clean signal
+    for cls, slope in [("A_class", 0.3), ("B_class", 0.3), ("C_class", 0.8)]:
+        x = rng.uniform(0, 5, size=50)
+        y = slope * x + rng.normal(0, 0.1, size=50)
+        for xi, yi in zip(x, y):
+            rows.append({"X": xi, "Y": yi, "class_name": cls})
+    df = pd.DataFrame(rows)
+
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    result = fit_degradation_regression(df, "X", "Y", class_col="class_name")
+
+    # All three classes present in slopes dict
+    assert set(result["slopes"].keys()) == {"A_class", "B_class", "C_class"}
+    # Slopes recovered within tolerance
+    for cls, expected in [("A_class", 0.3), ("B_class", 0.3), ("C_class", 0.8)]:
+        assert abs(result["slopes"][cls]["slope"] - expected) < 0.15, \
+            f"{cls}: got {result['slopes'][cls]['slope']:.3f}, expected {expected}"
+    # Joint F-test rejects null (one class differs)
+    assert result["interaction_p"] < 0.001
+    # n_per_class matches
+    assert result["n_per_class"] == {"A_class": 50, "B_class": 50, "C_class": 50}
+
+
+def test_fit_degradation_regression_raises_on_zero_variance_metric():
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = pd.DataFrame({
+        "X": [1.0] * 40,  # constant — zero variance
+        "Y": list(range(40)),
+        "class_name": ["a"] * 20 + ["b"] * 20,
+    })
+    with pytest.raises(ValueError, match="zero variance"):
+        fit_degradation_regression(df, "X", "Y", class_col="class_name")
+
+
+def test_fit_degradation_regression_raises_on_undersized_class():
+    from target_affinity_ml.benchmarks.scaffold_diversity import fit_degradation_regression
+    df = pd.DataFrame({
+        "X": list(range(40)),
+        "Y": list(range(40)),
+        "class_name": ["a"] * 38 + ["b"] * 2,  # b has only 2 obs
+    })
+    with pytest.raises(ValueError, match="only 2 observations"):
+        fit_degradation_regression(df, "X", "Y", class_col="class_name")
