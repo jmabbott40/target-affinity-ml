@@ -11,11 +11,11 @@ tasks complete, individual function imports may fail; that's expected.
 """
 
 # Imports will be uncommented as Tasks 2-15 populate the corresponding modules.
-# from target_affinity_ml.benchmarks.scaffold_diversity import (
-#     compute_scaffold_metrics,
-#     compute_class_aggregates,
-#     fit_degradation_regression,
-# )
+from target_affinity_ml.benchmarks.scaffold_diversity import (  # noqa: F401
+    compute_scaffold_metrics,
+    compute_class_aggregates,
+)
+# fit_degradation_regression is added in P3-T13.
 from target_affinity_ml.benchmarks.rns_scoring import fetch_structure  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import fetch_binding_site  # noqa: F401
 from target_affinity_ml.benchmarks.rns_scoring import compute_msa  # noqa: F401
